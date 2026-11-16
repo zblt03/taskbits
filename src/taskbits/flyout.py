@@ -4,26 +4,37 @@ Both are ordinary top-level windows (not embedded in the taskbar), so they can
 have real transparency: they paint a rounded, bordered card themselves.
 
 Widgets build the *content* of their panel with the helpers at the bottom of
-this module (``title``, ``caption``, ``buttons_row``…), so every panel shares
+this module (``label``, ``button``, ``buttons_row``…), so every panel shares
 the same look and theme.
+
+Every panel opens with its widget's own drawing, enlarged, on a strip of
+taskbar colour: the bit you clicked, lifted out of the taskbar. That is why
+panels have no title of their own.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from PySide6.QtCore import QPoint, QRect, QRectF, QSize, Qt, SignalInstance
-from PySide6.QtGui import QColor, QGuiApplication, QKeyEvent, QPainter, QPaintEvent, QPen
+from PySide6.QtGui import QColor, QGuiApplication, QKeyEvent, QPainter, QPainterPath, QPaintEvent, QPen
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
-from taskbits.widgets.drawing import FONT_FAMILIES
+from taskbits.sizing import metrics_for
+from taskbits.widgets.drawing import FONT_FAMILIES, background_for
+
+if TYPE_CHECKING:
+    from taskbits.widgets.base import Widget
 
 GAP_ABOVE_TASKBAR = 10  # logical px between the taskbar and a pop-up
 SCREEN_MARGIN = 8  # keep pop-ups this far from the screen edges
 RADIUS = 8
 PANEL_WIDTH = 300
+PADDING = 16  # space around the panel content
+HERO_METRICS = metrics_for(72)  # the widget drawn 1.5x its default taskbar size
+ACCENT_LINE = 2  # px, under the hero strip
 
 
 @dataclass(frozen=True)
@@ -163,17 +174,64 @@ class HoverCard(_Card):
         self.show_at(anchor)
 
 
-class Flyout(_Card):
-    """The panel opened by clicking a widget. Closes on a click outside or Esc."""
+class Hero(QWidget):
+    """The clicked widget, drawn as on the taskbar but 1.5x bigger. Stays live."""
 
-    def __init__(self, content: QWidget, light: bool) -> None:
+    def __init__(self, widget: Widget) -> None:
+        super().__init__()
+        self.widget = widget
+        self.setFixedHeight(HERO_METRICS.height)
+        widget.changed.connect(self.update)  # Qt disconnects it when this is destroyed
+
+    def accent(self) -> QColor | None:
+        return self.widget.accent()
+
+    def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        metrics = HERO_METRICS
+        width = metrics.widget_width(self.widget.size)
+        rect = QRectF(PADDING - 8, metrics.margin, width, metrics.height - 2 * metrics.margin)
+        self.widget.paint(painter, rect, text_color(self), metrics.scale)
+
+
+class Flyout(_Card):
+    """The panel opened by clicking a widget. Closes on a click outside or Esc.
+
+    With ``hero``, the panel starts with that widget enlarged on a taskbar-coloured strip.
+    """
+
+    def __init__(self, content: QWidget, light: bool, hero: Widget | None = None) -> None:
         super().__init__(Qt.WindowType.Popup)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self._hero = Hero(hero) if hero is not None else None
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 14, 16, 16)
-        layout.addWidget(content)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        if self._hero is not None:
+            layout.addWidget(self._hero)
+            layout.addSpacing(ACCENT_LINE)
+        body = QVBoxLayout()
+        body.setContentsMargins(PADDING, 14, PADDING, PADDING)
+        body.addWidget(content)
+        layout.addLayout(body)
         self.setFixedWidth(PANEL_WIDTH)
         self.set_light_theme(light)
+
+    def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802
+        super().paintEvent(event)
+        if self._hero is None:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        card = QPainterPath()
+        card.addRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), RADIUS - 1, RADIUS - 1)
+        painter.setClipPath(card)
+        strip = QRectF(0, 0, self.width(), self._hero.height())
+        painter.fillRect(strip, background_for(self.colors.text))
+        accent = self._hero.accent() or self.colors.border
+        painter.fillRect(QRectF(0, strip.bottom(), self.width(), ACCENT_LINE), accent)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
         if event.key() == Qt.Key.Key_Escape:

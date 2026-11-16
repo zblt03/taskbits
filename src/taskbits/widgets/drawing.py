@@ -21,6 +21,15 @@ FONT_WEIGHT = 550  # between Regular and Semibold (variable "wght" axis)
 PADDING_X = 8
 DETAIL_OPACITY = 0.72  # the second line is a little dimmer than the first
 
+# Bit colours: each widget has one, and colour only ever means "which bit" or
+# "needs attention". Tuned to read on both the dark and the light taskbar.
+BIT_BLUE = QColor("#6A9BFF")  # calendar, memory, rain, night
+BIT_AMBER = QColor("#F5B83D")  # sun, weather
+BIT_VIOLET = QColor("#B88CFF")  # focus
+BIT_GREEN = QColor("#4FC28A")  # system, charging, breaks
+BIT_RED = QColor("#FF6E61")  # alerts: low battery, busy CPU
+BIT_PINK = QColor("#FF7AB6")  # music
+
 # Segoe Fluent Icons code points.
 GLYPH_CPU = ""
 GLYPH_MEMORY = ""
@@ -182,10 +191,10 @@ def draw_ring(
 # --- weather icons (Segoe Fluent Icons has no rain/snow/storm, so they are drawn) ------
 
 
-SUN_COLOR = QColor("#F9AB00")
-MOON_COLOR = QColor("#8AB4F8")
-DROP_COLOR = QColor("#4F8EF7")
-BOLT_COLOR = QColor("#F9AB00")
+SUN_COLOR = BIT_AMBER
+MOON_COLOR = QColor("#9DBBFF")  # a paler BIT_BLUE
+DROP_COLOR = BIT_BLUE
+BOLT_COLOR = BIT_AMBER
 
 
 class Sky(Enum):

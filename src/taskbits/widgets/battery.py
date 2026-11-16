@@ -13,12 +13,12 @@ from PySide6.QtWidgets import QWidget
 from taskbits import flyout
 
 from taskbits.widgets.base import Widget
-from taskbits.widgets.drawing import battery_glyph, dimmed, draw_bar, draw_glyph, draw_icon_and_lines
+from taskbits.widgets.drawing import BIT_GREEN, BIT_RED, battery_glyph, dimmed, draw_bar, draw_icon_and_lines
 
 UPDATE_INTERVAL_MS = 30_000
 LOW_PERCENT = 20
-LOW_COLOR = QColor("#E8453C")
-CHARGING_COLOR = QColor("#34A853")
+LOW_COLOR = BIT_RED
+CHARGING_COLOR = BIT_GREEN
 
 NO_BATTERY_FLAG = 128
 UNKNOWN = 255
@@ -136,39 +136,24 @@ class BatteryWidget(Widget):
         return "\n".join(lines)
 
     def panel(self) -> QWidget:
-        """Large battery icon and level, a charge bar, the state, and power settings."""
+        """A charge bar, what the battery is doing, and a link to the power settings."""
         status_label = flyout.label("", "caption")
-        level_label = flyout.label("", "big")
-
-        def paint_icon(painter: QPainter, rect: QRectF, text: QColor) -> None:
-            status = self._status
-            if status is not None and status.has_battery:
-                glyph = battery_glyph(status.percent or 0, status.charging)
-                draw_glyph(painter, glyph, rect, self.accent() or text)
 
         def paint_bar(painter: QPainter, rect: QRectF, text: QColor) -> None:
             status = self._status
             percent = status.percent if status is not None and status.percent is not None else 0
             draw_bar(painter, rect, percent / 100, self.accent() or text, dimmed(text, 0.12))
 
-        icon = flyout.Painted(56, 56, paint_icon)
-        bar = flyout.Painted(268, 8, paint_bar)
-        header = flyout.buttons_row()  # an empty row to hold the icon and the level
-        header.layout().addWidget(icon)
-        header.layout().addWidget(level_label, 1)
+        bar = flyout.Painted(268, 6, paint_bar)
 
         def update() -> None:
             text = self.tooltip() or "Battery\nUnavailable"
             title, _, details = text.partition("\n")
-            level_label.setText(self.lines()[0])
             status_label.setText(details or title)
-            icon.update()
             bar.update()
 
         update()
         content = flyout.column(
-            flyout.label("Battery", "title"),
-            header,
             bar,
             status_label,
             flyout.button(

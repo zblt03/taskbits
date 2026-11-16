@@ -13,7 +13,7 @@ from taskbits.widgets.base import Widget
 from taskbits.widgets.battery import BatteryWidget
 from taskbits.widgets.calendar import CalendarWidget
 from taskbits.widgets.clock import ClockWidget
-from taskbits.widgets.drawing import GLYPH_MUSIC, draw_icon_and_lines
+from taskbits.widgets.drawing import BIT_PINK, GLYPH_MUSIC, draw_icon_and_lines
 from taskbits.widgets.focus import FocusWidget
 from taskbits.widgets.system import SystemWidget
 from taskbits.widgets.weather import WeatherWidget
@@ -29,7 +29,7 @@ class MusicWidget(Widget):
         return "Blinding Lights", "The Weeknd"  # fake
 
     def accent(self) -> QColor | None:
-        return QColor("#E8453C")
+        return BIT_PINK
 
     def tooltip(self) -> str:
         return "Now playing\nPlaceholder: real media controls are coming"

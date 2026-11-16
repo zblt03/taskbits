@@ -11,15 +11,15 @@ import time
 from collections.abc import Callable
 from enum import Enum
 
-from PySide6.QtCore import QRectF, Qt, QTimer
+from PySide6.QtCore import QRectF, QTimer
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QWidget
 
 from taskbits import flyout
-
 from taskbits.widgets.base import Widget
 from taskbits.widgets.drawing import (
-    text_font,
+    BIT_GREEN,
+    BIT_VIOLET,
     GLYPH_PAUSE,
     GLYPH_PLAY,
     PADDING_X,
@@ -31,8 +31,8 @@ from taskbits.widgets.drawing import (
 
 FOCUS_SECONDS = 25 * 60
 BREAK_SECONDS = 5 * 60
-FOCUS_COLOR = QColor("#A142F4")
-BREAK_COLOR = QColor("#34A853")
+FOCUS_COLOR = BIT_VIOLET
+BREAK_COLOR = BIT_GREEN
 
 
 class Phase(Enum):
@@ -171,23 +171,8 @@ class FocusWidget(Widget):
         draw_two_lines(painter, text, heading, detail, text_color, scale, heading_px=15, detail_px=11)
 
     def panel(self) -> QWidget:
-        """A large ring with the time inside, the session count and the controls."""
-
-        def paint_ring(painter: QPainter, rect: QRectF, text_color: QColor) -> None:
-            size = min(rect.width(), rect.height())
-            ring = QRectF(rect.center().x() - size / 2, rect.center().y() - size / 2, size, size)
-            draw_ring(painter, ring, self._fraction_left(), self.accent(), dimmed(text_color, 0.15), 8)
-            heading, detail = self.lines()
-            painter.setPen(text_color)
-            painter.setFont(text_font(30, 600))
-            painter.drawText(ring.adjusted(0, -12, 0, -12), Qt.AlignmentFlag.AlignCenter, heading)
-            painter.setPen(dimmed(text_color))
-            painter.setFont(text_font(13))
-            painter.drawText(ring.adjusted(0, 34, 0, 34), Qt.AlignmentFlag.AlignCenter, detail)
-
-        ring = flyout.Painted(268, 160, paint_ring)
+        """How many sessions are done, and start/pause, skip and reset."""
         sessions = flyout.label("", "caption")
-        sessions.setAlignment(Qt.AlignmentFlag.AlignCenter)
         start = flyout.button("", self.clicked, primary=True, close=False)
         controls = flyout.buttons_row(
             start,
@@ -196,15 +181,15 @@ class FocusWidget(Widget):
         )
 
         def update() -> None:
-            ring.update()
             timer = self._pomodoro
             not_started = not timer.running and timer.remaining(0) == timer.durations[timer.phase]
             start.setText("Pause" if timer.running else "Start" if not_started else "Resume")
             minutes = timer.durations[Phase.FOCUS] // 60
-            sessions.setText(f"{self.completed} focus sessions done · {minutes} min each")
+            done = "1 session" if self.completed == 1 else f"{self.completed} sessions"
+            sessions.setText(f"{done} of {minutes} minutes done today")
 
         update()
-        content = flyout.column(flyout.label("Focus timer", "title"), ring, sessions, controls, spacing=10)
+        content = flyout.column(sessions, controls, spacing=10)
         flyout.follow(self.changed, content, update)
         return content
 

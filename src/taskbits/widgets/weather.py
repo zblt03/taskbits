@@ -24,6 +24,9 @@ from PySide6.QtWidgets import QInputDialog, QMessageBox, QWidget
 from taskbits import __version__, flyout, settings
 from taskbits.widgets.base import Widget, emit_from_thread
 from taskbits.widgets.drawing import (
+    BIT_AMBER,
+    BIT_BLUE,
+    MOON_COLOR,
     PADDING_X,
     Sky,
     background_for,
@@ -45,9 +48,9 @@ RETRY_MS = 2 * 60_000
 
 DEFAULT_LOCATION = {"city": "Madrid", "latitude": 40.4165, "longitude": -3.70256}
 
-SUN_COLOR = QColor("#F9AB00")
-NIGHT_COLOR = QColor("#8AB4F8")
-RAIN_COLOR = QColor("#4285F4")
+SUN_COLOR = BIT_AMBER
+NIGHT_COLOR = MOON_COLOR
+RAIN_COLOR = BIT_BLUE
 
 # WMO weather codes used by Open-Meteo, as short words that fit a 1-wide
 # widget (tests/test_weather.py measures them with the real font).
@@ -346,26 +349,13 @@ class WeatherWidget(Widget):
             message = "Can't reach the weather service." if self._failed_last else "Loading the weather…"
             return flyout.column(city, flyout.label(message, "caption"), actions, spacing=10)
 
-        def paint_now(painter: QPainter, rect: QRectF, text: QColor) -> None:
-            sky = sky_for(weather.code, weather.is_day)
-            draw_weather_icon(painter, rect.adjusted(4, 8, -4, 0), sky, text, flyout_background(text))
-
-        now_icon = flyout.Painted(64, 64, paint_now)
-        summary = flyout.column(
-            flyout.label(format_temperature(weather.temperature), "big"),
-            flyout.label(self._summary(weather), "caption"),
-            spacing=0,
-        )
-        header = flyout.buttons_row()
-        header.layout().addWidget(now_icon)
-        header.layout().addWidget(summary, 1)
-
+        header = flyout.column(city, flyout.label(self._summary(weather), "caption"), spacing=0)
         parts = []
         if weather.sunrise and weather.sunset:
-            parts.append(f"Sunrise {weather.sunrise} · Sunset {weather.sunset}")
+            parts.append(f"Sunrise {weather.sunrise}, sunset {weather.sunset}")
         if self._updated is not None:
             parts.append(f"Updated {self._updated:%H:%M}" + (" (offline)" if self._failed_last else ""))
-        children: list[QWidget] = [city, header]
+        children: list[QWidget] = [header]
         if weather.hours:
             children += [flyout.separator(), flyout.Painted(268, 74, lambda p, r, t: self._paint_hours(p, r, t))]
         children += [flyout.label("\n".join(parts), "caption"), actions]
@@ -375,7 +365,8 @@ class WeatherWidget(Widget):
     def _summary(weather: Weather) -> str:
         if weather.high is None or weather.low is None:
             return weather.description
-        return f"{weather.description} · {format_temperature(weather.high)} / {format_temperature(weather.low)}"
+        high, low = format_temperature(weather.high), format_temperature(weather.low)
+        return f"{weather.description}, high {high}, low {low}"
 
     def _paint_hours(self, painter: QPainter, rect: QRectF, text: QColor) -> None:
         """Columns of hour, icon and temperature."""

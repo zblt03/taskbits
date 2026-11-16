@@ -16,14 +16,14 @@ from PySide6.QtWidgets import QWidget
 from taskbits import flyout
 
 from taskbits.widgets.base import Widget
-from taskbits.widgets.drawing import PADDING_X, dimmed, draw_bar, draw_two_lines, draw_vertical_bar
+from taskbits.widgets.drawing import BIT_BLUE, BIT_GREEN, BIT_RED, PADDING_X, dimmed, draw_bar, draw_two_lines, draw_vertical_bar
 
 log = logging.getLogger(__name__)
 
 UPDATE_INTERVAL_MS = 2_000
-BUSY_COLOR = QColor("#E8453C")  # accent when the CPU is almost maxed out
-NORMAL_COLOR = QColor("#34A853")
-MEMORY_COLOR = QColor("#4F8EF7")
+BUSY_COLOR = BIT_RED  # accent when the CPU is almost maxed out
+NORMAL_COLOR = BIT_GREEN
+MEMORY_COLOR = BIT_BLUE
 BUSY_THRESHOLD = 90
 HISTORY_LENGTH = 60  # CPU samples kept for the panel graph (2 minutes)
 
@@ -192,21 +192,20 @@ class SystemWidget(Widget):
             percent = self._memory[0] if self._memory else 0
             draw_bar(painter, rect, percent / 100, MEMORY_COLOR, dimmed(text, 0.12))
 
-        memory_bar = flyout.Painted(268, 8, paint_memory)
+        memory_bar = flyout.Painted(268, 6, paint_memory)
         uptime = flyout.label("", "caption")
 
         def update() -> None:
-            cpu_label.setText(f"CPU · {self._cpu}%")
+            cpu_label.setText(f"Processor {self._cpu}%, last two minutes")
             if self._memory is not None:
                 percent, used, total = self._memory
-                memory_label.setText(f"Memory · {used:.1f} of {total:.1f} GB ({percent}%)")
+                memory_label.setText(f"Memory {used:.1f} of {total:.1f} GB")
             uptime.setText(f"Windows has been on for {format_uptime(uptime_seconds())}")
             graph.update()
             memory_bar.update()
 
         update()
         content = flyout.column(
-            flyout.label("System", "title"),
             cpu_label,
             graph,
             memory_label,

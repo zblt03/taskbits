@@ -53,19 +53,10 @@ class ClockWidget(Widget):
         draw_two_lines(painter, text, heading, detail, text_color, scale, heading_px=16, detail_px=11)
 
     def panel(self) -> QWidget:
-        """Big live clock, the full date and this month's calendar with today marked."""
-        time_label = flyout.label("", "big")
-        date_label = flyout.label("", "caption")
-
-        def update() -> None:
-            now = datetime.now()
-            time_label.setText(f"{now:%H:%M:%S}")
-            date_label.setText(f"{now:%A %d %B %Y} · week {week_number(now.date())}")
-
-        update()
-        content = flyout.column(time_label, date_label, flyout.separator(), self._month_view(date.today()))
-        flyout.follow(self.changed, content, update)
-        return content
+        """The full date with the week number, and this month's calendar with today marked."""
+        today = date.today()
+        heading = flyout.label(f"{today:%A %d %B %Y}, week {week_number(today)}")
+        return flyout.column(heading, self._month_view(today), spacing=8)
 
     @staticmethod
     def _month_view(today: date) -> QWidget:
@@ -73,11 +64,9 @@ class ClockWidget(Widget):
         grid = QGridLayout(box)
         grid.setContentsMargins(0, 4, 0, 0)
         grid.setSpacing(2)
-        title = flyout.label(f"{today:%B %Y}", "section")
-        grid.addWidget(title, 0, 0, 1, 7)
         for column, name in enumerate(WEEKDAYS):
-            grid.addWidget(flyout.label(name, "weekday"), 1, column)
-        for row, week in enumerate(month_weeks(today.year, today.month), start=2):
+            grid.addWidget(flyout.label(name, "weekday"), 0, column)
+        for row, week in enumerate(month_weeks(today.year, today.month), start=1):
             for column, day in enumerate(week):
                 if day:
                     grid.addWidget(flyout.label(str(day), "today" if day == today.day else "day"), row, column)

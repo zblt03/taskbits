@@ -219,7 +219,7 @@ class App(QObject):
         if content is None or anchor is None:
             widget.clicked()
             return
-        flyout = Flyout(content, taskbar.uses_light_theme())
+        flyout = Flyout(content, taskbar.uses_light_theme(), hero=widget)
         flyout.destroyed.connect(lambda: self._on_flyout_closed(item))
         self._flyout, self._flyout_item = flyout, item
         flyout.show_at(anchor)

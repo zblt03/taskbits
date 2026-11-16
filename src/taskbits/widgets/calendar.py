@@ -25,7 +25,7 @@ from taskbits import flyout, paths, settings
 from taskbits.google import auth, calendar_client
 from taskbits.google.events import Event, agenda, format_time_range, select_event
 from taskbits.widgets.base import BAR_GAP, BAR_WIDTH, Widget, emit_from_thread
-from taskbits.widgets.drawing import PADDING_X, dimmed, draw_two_lines, draw_vertical_bar, text_font
+from taskbits.widgets.drawing import BIT_BLUE, PADDING_X, dimmed, draw_two_lines, draw_vertical_bar, text_font
 
 log = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ SETUP_URL = "https://github.com/zblt03/taskbits#calendar-widget"
 REFRESH_MS = 5 * 60_000
 RETRY_MS = 30_000  # while offline
 RESELECT_MS = 30_000  # switch to the right event on time, no API call
-CALENDAR_BLUE = QColor("#4285F4")
+CALENDAR_BLUE = BIT_BLUE  # when an event has no calendar colour
 COUNTDOWN_MINUTES = 60  # show "in 15 min" when the next event is this close
 ROW_TEXT_WIDTH = 220  # px available for an event row's text in the panel
 
@@ -284,7 +284,6 @@ class CalendarWidget(Widget):
 
     def panel(self) -> QWidget:
         """Today's and tomorrow's agenda, or what to do to get there (sign in, set up)."""
-        title = flyout.label("Calendar", "title")
         open_calendar = flyout.button("Open Google Calendar", lambda: QDesktopServices.openUrl(QUrl(CALENDAR_URL)))
         refresh = flyout.button("Refresh", self.refresh)
 
@@ -296,10 +295,10 @@ class CalendarWidget(Widget):
                 action = flyout.button("Setup instructions", lambda: QDesktopServices.openUrl(QUrl(SETUP_URL)))
             else:
                 action = refresh
-            return flyout.column(title, message, action, spacing=10)
+            return flyout.column(message, action, spacing=10)
 
         now = datetime.now().astimezone()
-        children: list[QWidget] = [title]
+        children: list[QWidget] = []
         days = agenda(self.events, now, days=2 if self._settings().get("show_tomorrow", True) else 1)
         if not days:
             children.append(flyout.label("Nothing else on your calendar today.", "caption"))
@@ -313,7 +312,7 @@ class CalendarWidget(Widget):
 
     def _event_row(self, event: Event, now: datetime) -> QPushButton:
         """A clickable row: coloured dot, time range and title. Opens the event."""
-        when = format_time_range(event, now) + (" · now" if event.start <= now else "")
+        when = format_time_range(event, now) + (", now" if event.start <= now else "")
         metrics = QFontMetricsF(text_font(13))
         title = metrics.elidedText(event.title, Qt.TextElideMode.ElideRight, ROW_TEXT_WIDTH)
         row = flyout.button(f"{when}\n{title}", lambda: QDesktopServices.openUrl(QUrl(event.html_link or CALENDAR_URL)))
