@@ -1,7 +1,6 @@
 """Built-in widgets.
 
-System, Battery, Focus timer, Weather and Clock are real. Calendar and Now
-playing still show placeholder data; each gets real data in a later step.
+All are real except Now playing, which still shows placeholder data.
 Larger widgets live in their own modules and are imported here.
 """
 
@@ -14,22 +13,11 @@ from PySide6.QtGui import QColor
 
 from taskbits.widgets.base import Widget
 from taskbits.widgets.battery import BatteryWidget
+from taskbits.widgets.calendar import CalendarWidget
 from taskbits.widgets.focus import FocusWidget
 from taskbits.widgets.system import SystemWidget
 from taskbits.widgets.weather import WeatherWidget
 
-
-class CalendarWidget(Widget):
-    id = "calendar"
-    name = "Calendar"
-    description = "Your current or next Google Calendar event."
-    size = 2
-
-    def lines(self) -> tuple[str, str]:
-        return "19:30–20:30", "Gym"  # fake
-
-    def accent(self) -> QColor | None:
-        return QColor("#4285F4")
 
 
 class ClockWidget(Widget):
