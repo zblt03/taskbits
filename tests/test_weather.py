@@ -90,3 +90,20 @@ def test_every_rain_and_snow_code_has_a_matching_icon() -> None:
             assert sky_for(code) is Sky.RAIN, code
         if word in ("Snow", "Flurries"):
             assert sky_for(code) is Sky.SNOW, code
+
+
+def test_parse_forecast_with_hours_and_sun() -> None:
+    data = {
+        **FORECAST,
+        "daily": {**FORECAST["daily"], "sunrise": ["2026-11-16T08:01"], "sunset": ["2026-11-16T17:58"]},
+        "hourly": {
+            "time": ["2026-11-16T21:00", "2026-11-16T22:00"],
+            "temperature_2m": [12.4, None],
+            "weather_code": [3, 61],
+            "is_day": [0, 0],
+        },
+    }
+    weather = parse_forecast(data)
+    assert (weather.sunrise, weather.sunset) == ("08:01", "17:58")
+    assert len(weather.hours) == 1  # the hour with a missing temperature is skipped
+    assert (weather.hours[0].hour, weather.hours[0].code, weather.hours[0].is_day) == ("21", 3, False)

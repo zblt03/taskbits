@@ -30,7 +30,7 @@ from PySide6.QtGui import (
     QPaintEvent,
     QPen,
 )
-from PySide6.QtWidgets import QApplication, QMenu, QToolTip, QWidget
+from PySide6.QtWidgets import QApplication, QMenu, QWidget
 
 from taskbits import taskbar
 from taskbits.layout import Item, Layout
@@ -67,6 +67,7 @@ class TaskbarHost(QWidget):
     """Frameless, never-focused window showing a row of widgets."""
 
     widget_clicked = Signal(object)  # Item
+    hover_changed = Signal(object)  # Item under the cursor, or None
     remove_requested = Signal(object)  # Item whose ✕ was clicked
     move_requested = Signal(object, int)  # Item, new index in the order
     drop_requested = Signal(str, int)  # widget id from the gallery, index in the order
@@ -83,7 +84,6 @@ class TaskbarHost(QWidget):
             | Qt.WindowType.NoDropShadowWindowHint,
         )
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-        self.setAttribute(Qt.WidgetAttribute.WA_AlwaysShowToolTips)
         self.setMouseTracking(True)
         self.setAcceptDrops(True)
 
@@ -151,6 +151,13 @@ class TaskbarHost(QWidget):
 
     # --- geometry ---------------------------------------------------------------
 
+    def item_rect(self, item: Item) -> QRectF | None:
+        """Area of a placed widget in this window, or None if it is not placed."""
+        placement = self._layout.placement_of(item)
+        if placement is None:
+            return None
+        return self.cell_rect(placement.start, placement.size)
+
     def cell_rect(self, start: int, size: int) -> QRectF:
         """Area of a widget starting at cell ``start``, ``size`` cells wide."""
         m = self.metrics
@@ -189,6 +196,7 @@ class TaskbarHost(QWidget):
         if item is not self._hover:
             self._hover = item
             self.update()
+            self.hover_changed.emit(item)
 
     # --- painting ---------------------------------------------------------------
 
@@ -388,18 +396,6 @@ class TaskbarHost(QWidget):
         # QCursor.pos() is always right; event.globalPos() is derived from where
         # Qt *thinks* the window is, which is wrong when embedded in the taskbar.
         menu.exec(QCursor.pos())
-
-    def event(self, event: QEvent) -> bool:  # noqa: A003
-        if event.type() == QEvent.Type.ToolTip and not self._edit_mode:
-            item = self._item_at(event.pos().x())
-            widget = self._widgets.get(item) if item else None
-            text = widget.tooltip() if widget else ""
-            if text:
-                QToolTip.showText(QCursor.pos(), text, self)
-            else:
-                QToolTip.hideText()
-            return True
-        return super().event(event)
 
     # --- drag and drop from the main window ---------------------------------------
 

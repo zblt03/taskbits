@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta, timezone
 
 from taskbits.google.events import Event
-from taskbits.widgets.calendar import countdown, progress
+from taskbits.widgets.calendar import countdown, day_name, progress
 
 NOW = datetime(2026, 11, 16, 12, 0, tzinfo=timezone.utc)
 
@@ -26,3 +26,10 @@ def test_countdown() -> None:
     assert countdown(event(0), NOW) == "now"
     assert countdown(event(61), NOW) is None  # too far away
     assert countdown(event(-1), NOW) is None  # already started
+
+
+def test_day_name() -> None:
+    today = NOW.date()
+    assert day_name(today, today) == "Today"
+    assert day_name(today + timedelta(days=1), today) == "Tomorrow"
+    assert day_name(today + timedelta(days=2), today) == "Wednesday 18"

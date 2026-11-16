@@ -184,3 +184,31 @@ def test_ongoing_comparison_across_timezones() -> None:
     # Started 09:00 New York = 15:00 Madrid, ends 16:00 Madrid → ongoing at 15:30.
     call = ev("NY standup", at(16, 9, 0, NEW_YORK), at(16, 10, 0, NEW_YORK))
     assert select_event([call], NOW).title == "NY standup"
+
+
+def test_agenda_groups_upcoming_events_by_day() -> None:
+    from datetime import timedelta as td
+
+    from taskbits.google.events import agenda
+
+    tz = timezone(td(hours=1))
+    now = datetime(2026, 11, 16, 12, 0, tzinfo=tz)
+
+    def at(day: int, hour: int, title: str, length: int = 1, **extra) -> Event:
+        start = datetime(2026, 11, day, hour, 0, tzinfo=tz)
+        return Event(title=title, start=start, end=start + td(hours=length), **extra)
+
+    events = [
+        at(16, 9, "Finished"),  # already over
+        at(16, 11, "Ongoing", length=2),
+        at(16, 18, "Gym"),
+        at(16, 18, "Gym"),  # duplicate from a second calendar
+        at(16, 20, "Declined", response_status="declined"),
+        at(17, 10, "Maths"),
+        at(18, 10, "Too far"),
+    ]
+    result = agenda(events, now)
+    assert [(day.day, [e.title for e in items]) for day, items in result] == [
+        (16, ["Ongoing", "Gym"]),
+        (17, ["Maths"]),
+    ]

@@ -2,6 +2,8 @@
 
 * :class:`~taskbits.host.TaskbarHost` draws the placed widgets inside the taskbar.
 * :class:`~taskbits.gallery.MainWindow` lists the widgets that can be added.
+* Resting the cursor on a widget shows a :class:`~taskbits.flyout.HoverCard`;
+  clicking it opens the widget's panel in a :class:`~taskbits.flyout.Flyout`.
 * A tray icon reopens the main window (there may be nothing on the taskbar to
   right-click) and quits the app.
 
@@ -14,12 +16,14 @@ import json
 import logging
 import math
 import sys
+import time
 
 from PySide6.QtCore import QObject, QRect, QTimer
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from taskbits import paths, taskbar
+from taskbits.flyout import Flyout, HoverCard
 from taskbits.gallery import MainWindow
 from taskbits.host import TaskbarHost
 from taskbits.icon import app_icon
@@ -34,6 +38,9 @@ PLACEMENT_INTERVAL_MS = 2_000  # re-check taskbar size, theme and position
 WATCH_INTERVAL_MS = 1_000  # Explorer restarts, hover, topmost (overlay)
 LEFT_OFFSET = 8  # logical px between the taskbar's left edge and the first widget
 DEFAULT_TASKBAR_HEIGHT = 48
+HOVER_DELAY_MS = 450  # how long the cursor must rest on a widget before its card shows
+# A click that closes a panel (by landing outside it) must not reopen it at once.
+REOPEN_GUARD_SECONDS = 0.35
 
 
 class App(QObject):
@@ -46,6 +53,15 @@ class App(QObject):
         self.widgets: dict[Item, Widget] = {}  # each item on the taskbar -> its running widget
         for item in self.layout.items:
             self._start_widget(item)
+
+        # Hover card and click panel (created before the host, which connects to them).
+        self.card = HoverCard()
+        self._hover_item: Item | None = None
+        self._hover_timer = QTimer(self, singleShot=True, interval=HOVER_DELAY_MS)
+        self._hover_timer.timeout.connect(self._show_hover_card)
+        self._flyout: Flyout | None = None
+        self._flyout_item: Item | None = None
+        self._flyout_closed: tuple[Item | None, float] = (None, 0.0)  # (item, when)
 
         self.metrics = self._current_metrics()
         self.host = self._create_host()
@@ -94,6 +110,7 @@ class App(QObject):
         widget = catalog.create(item.widget_id)
         if widget is not None:
             self.widgets[item] = widget
+            widget.changed.connect(lambda: self._refresh_hover_card(item))
 
     def add_widget(self, widget_id: str, index: int | None = None) -> None:
         """Put a widget on the taskbar at position ``index`` (default: after the others)."""
@@ -113,6 +130,7 @@ class App(QObject):
         if not self.layout.remove(item):
             return
         log.info("Removed %s", item.widget_id)
+        self._hide_popups()
         widget = self.widgets.pop(item, None)
         if widget is not None:
             widget.stop()
@@ -130,10 +148,86 @@ class App(QObject):
         self.host.set_items(self.layout, self.widgets)
         self.window.update_space(self.layout)
 
+    # --- hover card and click panel ----------------------------------------------------
+
+    def _screen_rect(self, item: Item) -> QRect | None:
+        """Where a placed widget is on screen, in logical pixels.
+
+        Asks Windows where the host window is: Qt's own idea is wrong when the
+        window is embedded in the taskbar.
+        """
+        local = self.host.item_rect(item)
+        window = taskbar.window_rect(int(self.host.winId()))
+        if local is None or window is None:
+            return None
+        ratio = self.host.devicePixelRatioF()
+        return QRect(
+            round(window.left / ratio + local.left()),
+            round(window.top / ratio + local.top()),
+            round(local.width()),
+            round(local.height()),
+        )
+
+    def _on_hover_changed(self, item: Item | None) -> None:
+        self._hover_item = item
+        self.card.hide()
+        if item is not None and not self.host.edit_mode and not self._flyout_open():
+            self._hover_timer.start()
+        else:
+            self._hover_timer.stop()
+
+    def _show_hover_card(self) -> None:
+        item = self._hover_item
+        widget = self.widgets.get(item) if item is not None else None
+        if widget is None or self.host.edit_mode or self._flyout_open():
+            return
+        text = widget.tooltip()
+        anchor = self._screen_rect(item)
+        if text and anchor is not None:
+            self.card.set_light_theme(taskbar.uses_light_theme())
+            self.card.show_text(text, anchor)
+
+    def _refresh_hover_card(self, item: Item) -> None:
+        """Keep a visible card up to date (e.g. the focus timer counting down)."""
+        if self.card.isVisible() and item is self._hover_item:
+            widget = self.widgets.get(item)
+            anchor = self._screen_rect(item)
+            if widget is not None and anchor is not None and widget.tooltip():
+                self.card.show_text(widget.tooltip(), anchor)
+
+    def _flyout_open(self) -> bool:
+        return self._flyout is not None and self._flyout.isVisible()
+
+    def _hide_popups(self) -> None:
+        self._hover_timer.stop()
+        self.card.hide()
+        if self._flyout_open():
+            self._flyout.close()
+
     def _on_widget_clicked(self, item: Item) -> None:
+        """Open the widget's panel; widgets without one handle the click themselves."""
+        self._hover_timer.stop()
+        self.card.hide()
         widget = self.widgets.get(item)
-        if widget is not None:
+        if widget is None:
+            return
+        closed_item, closed_at = self._flyout_closed
+        if closed_item is item and time.monotonic() - closed_at < REOPEN_GUARD_SECONDS:
+            return  # this click just closed the panel: clicking again toggles it shut
+        content = widget.panel()
+        anchor = self._screen_rect(item)
+        if content is None or anchor is None:
             widget.clicked()
+            return
+        flyout = Flyout(content, taskbar.uses_light_theme())
+        flyout.destroyed.connect(lambda: self._on_flyout_closed(item))
+        self._flyout, self._flyout_item = flyout, item
+        flyout.show_at(anchor)
+        flyout.activateWindow()
+
+    def _on_flyout_closed(self, item: Item) -> None:
+        self._flyout_closed = (item, time.monotonic())
+        self._flyout, self._flyout_item = None, None
 
     # --- main window and tray ----------------------------------------------------------
 
@@ -156,6 +250,9 @@ class App(QObject):
         over_host = taskbar.cursor_in_window(int(self.host.winId())) is not None
         keep = self.host.edit_mode and self.window.isVisible() and (over_host or self.host.dragging)
         self.host.set_edit_mode(window_active or keep)
+        if self.host.edit_mode:
+            self._hover_timer.stop()
+            self.card.hide()
 
     def _create_tray(self) -> QSystemTrayIcon:
         tray = QSystemTrayIcon(app_icon(), self)
@@ -188,6 +285,7 @@ class App(QObject):
     def _create_host(self) -> TaskbarHost:
         host = TaskbarHost(self.metrics, embedded=self.embed)
         host.widget_clicked.connect(self._on_widget_clicked)
+        host.hover_changed.connect(self._on_hover_changed)
         host.remove_requested.connect(self.remove_widget)
         host.move_requested.connect(self.move_widget)
         host.drop_requested.connect(self.add_widget)

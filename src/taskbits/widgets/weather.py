@@ -17,13 +17,21 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from PySide6.QtCore import QRectF, QTimer, QUrl, Signal
+from PySide6.QtCore import QRectF, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QPainter
-from PySide6.QtWidgets import QInputDialog, QMessageBox
+from PySide6.QtWidgets import QInputDialog, QMessageBox, QWidget
 
-from taskbits import __version__, settings
+from taskbits import __version__, flyout, settings
 from taskbits.widgets.base import Widget, emit_from_thread
-from taskbits.widgets.drawing import PADDING_X, Sky, background_for, draw_two_lines, draw_weather_icon
+from taskbits.widgets.drawing import (
+    PADDING_X,
+    Sky,
+    background_for,
+    dimmed,
+    draw_two_lines,
+    draw_weather_icon,
+    text_font,
+)
 
 log = logging.getLogger(__name__)
 
@@ -32,6 +40,7 @@ GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
 USER_AGENT = f"Taskbits/{__version__}"
 TIMEOUT_SECONDS = 10
 REFRESH_MS = 15 * 60_000
+HOURS_SHOWN = 5  # columns in the panel's hourly forecast
 RETRY_MS = 2 * 60_000
 
 DEFAULT_LOCATION = {"city": "Madrid", "latitude": 40.4165, "longitude": -3.70256}
@@ -95,6 +104,16 @@ def sky_for(code: int, is_day: bool = True) -> Sky:
 
 
 @dataclass(frozen=True)
+class Hour:
+    """One column of the hourly forecast."""
+
+    hour: str  # "22" (local time at the location)
+    temperature: float
+    code: int
+    is_day: bool
+
+
+@dataclass(frozen=True)
 class Weather:
     """What the widget shows, parsed from an Open-Meteo forecast response."""
 
@@ -103,6 +122,9 @@ class Weather:
     is_day: bool
     high: float | None
     low: float | None
+    hours: tuple[Hour, ...] = ()  # the next hours, starting with the current one
+    sunrise: str | None = None  # "08:01"
+    sunset: str | None = None
 
     @property
     def description(self) -> str:
@@ -130,12 +152,27 @@ def parse_forecast(data: dict[str, Any]) -> Weather:
     current = data["current"]
     daily = data.get("daily", {})
     highs, lows = daily.get("temperature_2m_max") or [None], daily.get("temperature_2m_min") or [None]
+    hourly = data.get("hourly", {})
+    hours = tuple(
+        Hour(time[11:13], float(temperature), int(code), bool(day))
+        for time, temperature, code, day in zip(
+            hourly.get("time", []),
+            hourly.get("temperature_2m", []),
+            hourly.get("weather_code", []),
+            hourly.get("is_day", []),
+        )
+        if temperature is not None and code is not None
+    )
+    sunrises, sunsets = daily.get("sunrise") or [None], daily.get("sunset") or [None]
     return Weather(
         temperature=float(current["temperature_2m"]),
         code=int(current["weather_code"]),
         is_day=bool(current.get("is_day", 1)),
         high=None if highs[0] is None else float(highs[0]),
         low=None if lows[0] is None else float(lows[0]),
+        hours=hours,
+        sunrise=sunrises[0][11:16] if sunrises[0] else None,  # "2026-11-16T08:01" -> "08:01"
+        sunset=sunsets[0][11:16] if sunsets[0] else None,
     )
 
 
@@ -170,7 +207,9 @@ def fetch_weather(latitude: float, longitude: float) -> Weather:
             "latitude": latitude,
             "longitude": longitude,
             "current": "temperature_2m,weather_code,is_day",
-            "daily": "temperature_2m_max,temperature_2m_min",
+            "daily": "temperature_2m_max,temperature_2m_min,sunrise,sunset",
+            "hourly": "temperature_2m,weather_code,is_day",
+            "forecast_hours": HOURS_SHOWN,
             "timezone": "auto",
             "forecast_days": 1,
         },
@@ -181,6 +220,11 @@ def fetch_weather(latitude: float, longitude: float) -> Weather:
 def find_city(name: str) -> dict[str, Any] | None:
     """Look a city up by name. Raises on network errors; None if nothing matched."""
     return parse_geocoding(_get_json(GEOCODING_URL, {"name": name, "count": 1, "format": "json"}))
+
+
+def flyout_background(text: QColor) -> QColor:
+    """The panel background behind ``text`` (to outline clouds over the sun)."""
+    return flyout.LIGHT.background if text.lightness() < 128 else flyout.DARK.background
 
 
 # --- the widget -----------------------------------------------------------------------
@@ -289,6 +333,67 @@ class WeatherWidget(Widget):
         """Open a full forecast for the location in the browser."""
         query = urllib.parse.quote(f"weather {self._location['city']}")
         QDesktopServices.openUrl(QUrl(f"https://www.google.com/search?q={query}"))
+
+    def panel(self) -> QWidget:
+        """Current conditions, the next hours, sunrise/sunset and location buttons."""
+        weather = self._weather
+        city = flyout.label(self._location["city"], "title")
+        actions = flyout.buttons_row(
+            flyout.button("Full forecast", self.clicked),
+            flyout.button("Change location…", self._ask_location),
+        )
+        if weather is None:
+            message = "Can't reach the weather service." if self._failed_last else "Loading the weather…"
+            return flyout.column(city, flyout.label(message, "caption"), actions, spacing=10)
+
+        def paint_now(painter: QPainter, rect: QRectF, text: QColor) -> None:
+            sky = sky_for(weather.code, weather.is_day)
+            draw_weather_icon(painter, rect.adjusted(4, 8, -4, 0), sky, text, flyout_background(text))
+
+        now_icon = flyout.Painted(64, 64, paint_now)
+        summary = flyout.column(
+            flyout.label(format_temperature(weather.temperature), "big"),
+            flyout.label(self._summary(weather), "caption"),
+            spacing=0,
+        )
+        header = flyout.buttons_row()
+        header.layout().addWidget(now_icon)
+        header.layout().addWidget(summary, 1)
+
+        parts = []
+        if weather.sunrise and weather.sunset:
+            parts.append(f"Sunrise {weather.sunrise} · Sunset {weather.sunset}")
+        if self._updated is not None:
+            parts.append(f"Updated {self._updated:%H:%M}" + (" (offline)" if self._failed_last else ""))
+        children: list[QWidget] = [city, header]
+        if weather.hours:
+            children += [flyout.separator(), flyout.Painted(268, 74, lambda p, r, t: self._paint_hours(p, r, t))]
+        children += [flyout.label("\n".join(parts), "caption"), actions]
+        return flyout.column(*children, spacing=10)
+
+    @staticmethod
+    def _summary(weather: Weather) -> str:
+        if weather.high is None or weather.low is None:
+            return weather.description
+        return f"{weather.description} · {format_temperature(weather.high)} / {format_temperature(weather.low)}"
+
+    def _paint_hours(self, painter: QPainter, rect: QRectF, text: QColor) -> None:
+        """Columns of hour, icon and temperature."""
+        assert self._weather is not None
+        hours = self._weather.hours[:HOURS_SHOWN]
+        width = rect.width() / max(1, len(hours))
+        for index, hour in enumerate(hours):
+            column = QRectF(rect.left() + index * width, rect.top(), width, rect.height())
+            painter.setFont(text_font(12))
+            painter.setPen(dimmed(text))
+            label = "Now" if index == 0 else f"{hour.hour}h"
+            painter.drawText(QRectF(column.left(), column.top(), width, 16), Qt.AlignmentFlag.AlignCenter, label)
+            icon = QRectF(column.center().x() - 13, column.top() + 20, 26, 26)
+            draw_weather_icon(painter, icon, sky_for(hour.code, hour.is_day), text, flyout_background(text))
+            painter.setFont(text_font(13, 600))
+            painter.setPen(text)
+            temperature = QRectF(column.left(), column.bottom() - 18, width, 18)
+            painter.drawText(temperature, Qt.AlignmentFlag.AlignCenter, format_temperature(hour.temperature))
 
     def menu_actions(self) -> list[tuple[str, Any]]:
         return [("Refresh weather", self.refresh), ("Set location…", self._ask_location)]

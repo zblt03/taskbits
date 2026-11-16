@@ -25,6 +25,7 @@ from typing import Any, ClassVar
 
 from PySide6.QtCore import QObject, QRectF, Qt, Signal, SignalInstance
 from PySide6.QtGui import QColor, QPainter
+from PySide6.QtWidgets import QWidget
 
 from taskbits.widgets.drawing import PADDING_X, draw_two_lines
 
@@ -68,11 +69,19 @@ class Widget(QObject):
         return None
 
     def tooltip(self) -> str:
-        """Text shown on hover; empty for none."""
+        """Text of the hover card: the first line is its title. Empty for no card."""
         return ""
 
+    def panel(self) -> QWidget | None:
+        """Content of the panel that opens when the widget is clicked, or None.
+
+        Build it fresh on every call with the helpers in :mod:`taskbits.flyout`.
+        When this returns None, a click calls :meth:`clicked` instead.
+        """
+        return None
+
     def clicked(self) -> None:
-        """Called when the user clicks the widget (outside edit mode)."""
+        """Called when the widget is clicked and it has no :meth:`panel`."""
 
     def menu_actions(self) -> list[tuple[str, Callable[[], None]]]:
         """Extra right-click menu entries as (label, function) pairs."""

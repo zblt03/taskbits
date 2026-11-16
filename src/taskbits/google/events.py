@@ -7,7 +7,7 @@ makes ``select_event`` easy to test.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 EN_DASH = "–"
@@ -128,3 +128,22 @@ def select_event(events: list[Event], now: datetime, show_tomorrow: bool = True)
                 return Display(time_text, event.title, event)
 
     return Display(NO_EVENTS, "")
+
+
+def agenda(events: list[Event], now: datetime, days: int = 2) -> list[tuple[date, list[Event]]]:
+    """The events still to come (or happening) on each of the next ``days`` days.
+
+    Returns ``[(day, events sorted by start), ...]`` for today, tomorrow, …,
+    skipping days without events. Uses the same filter as :func:`select_event`
+    and the timezone of ``now``. Duplicates (same title and start) are dropped.
+    """
+    first_day = now.date()
+    by_day: dict[date, list[Event]] = {}
+    seen: set[tuple[str, datetime]] = set()
+    for event in sorted((e for e in events if is_relevant(e) and e.end > now), key=lambda e: e.start):
+        day = max(event.start.astimezone(now.tzinfo).date(), first_day)  # ongoing: today
+        if (day - first_day).days >= days or (event.title, event.start) in seen:
+            continue
+        seen.add((event.title, event.start))
+        by_day.setdefault(day, []).append(event)
+    return sorted(by_day.items())

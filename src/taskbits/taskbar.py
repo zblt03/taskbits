@@ -234,3 +234,15 @@ def cursor_in_window(hwnd: int) -> tuple[int, int] | None:
         return point.x - rect.left, point.y - rect.top
     return None
 
+
+
+def window_rect(hwnd: int) -> Rect | None:
+    """The window's rectangle on screen (physical pixels), or None if Windows refuses.
+
+    Unlike Qt's own idea of where the window is, this is right for a window
+    embedded in the taskbar.
+    """
+    raw = RECT()
+    if not user32.GetWindowRect(hwnd, ctypes.byref(raw)):
+        return None
+    return Rect(raw.left, raw.top, raw.right, raw.bottom)

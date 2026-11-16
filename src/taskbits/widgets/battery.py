@@ -6,11 +6,14 @@ import ctypes
 from ctypes import wintypes
 from dataclasses import dataclass
 
-from PySide6.QtCore import QRectF, QTimer
-from PySide6.QtGui import QColor, QPainter
+from PySide6.QtCore import QRectF, QTimer, QUrl
+from PySide6.QtGui import QColor, QDesktopServices, QPainter
+from PySide6.QtWidgets import QWidget
+
+from taskbits import flyout
 
 from taskbits.widgets.base import Widget
-from taskbits.widgets.drawing import battery_glyph, draw_icon_and_lines
+from taskbits.widgets.drawing import battery_glyph, dimmed, draw_bar, draw_glyph, draw_icon_and_lines
 
 UPDATE_INTERVAL_MS = 30_000
 LOW_PERCENT = 20
@@ -30,6 +33,7 @@ class PowerStatus:
     charging: bool
     percent: int | None  # None = unknown
     seconds_left: int | None  # None = unknown or plugged in
+    saver_on: bool = False  # Windows battery saver / energy saver
 
 
 def format_duration(seconds: int) -> str:
@@ -77,6 +81,7 @@ def read_power_status() -> PowerStatus | None:
         charging=bool(raw.BatteryFlag != UNKNOWN and raw.BatteryFlag & 8),
         percent=None if raw.BatteryLifePercent == UNKNOWN else raw.BatteryLifePercent,
         seconds_left=None if raw.BatteryLifeTime == 0xFFFFFFFF else raw.BatteryLifeTime,
+        saver_on=bool(raw.SystemStatusFlag & 1),
     )
 
 
@@ -117,9 +122,62 @@ class BatteryWidget(Widget):
 
     def tooltip(self) -> str:
         status = self._status
-        if status is None or not status.has_battery or status.seconds_left is None:
+        if status is None:
             return ""
-        return f"{format_duration(status.seconds_left)} left"
+        level, state = battery_lines(status)
+        lines = [f"Battery {level}" if status.has_battery else level]
+        details = [state] if state else []
+        if status.has_battery and status.seconds_left is not None and not status.charging:
+            details = [f"{format_duration(status.seconds_left)} left"]
+        if status.saver_on:
+            details.append("battery saver on")
+        if details:
+            lines.append(" · ".join(details))
+        return "\n".join(lines)
+
+    def panel(self) -> QWidget:
+        """Large battery icon and level, a charge bar, the state, and power settings."""
+        status_label = flyout.label("", "caption")
+        level_label = flyout.label("", "big")
+
+        def paint_icon(painter: QPainter, rect: QRectF, text: QColor) -> None:
+            status = self._status
+            if status is not None and status.has_battery:
+                glyph = battery_glyph(status.percent or 0, status.charging)
+                draw_glyph(painter, glyph, rect, self.accent() or text)
+
+        def paint_bar(painter: QPainter, rect: QRectF, text: QColor) -> None:
+            status = self._status
+            percent = status.percent if status is not None and status.percent is not None else 0
+            draw_bar(painter, rect, percent / 100, self.accent() or text, dimmed(text, 0.12))
+
+        icon = flyout.Painted(56, 56, paint_icon)
+        bar = flyout.Painted(268, 8, paint_bar)
+        header = flyout.buttons_row()  # an empty row to hold the icon and the level
+        header.layout().addWidget(icon)
+        header.layout().addWidget(level_label, 1)
+
+        def update() -> None:
+            text = self.tooltip() or "Battery\nUnavailable"
+            title, _, details = text.partition("\n")
+            level_label.setText(self.lines()[0])
+            status_label.setText(details or title)
+            icon.update()
+            bar.update()
+
+        update()
+        content = flyout.column(
+            flyout.label("Battery", "title"),
+            header,
+            bar,
+            status_label,
+            flyout.button(
+                "Power && battery settings", lambda: QDesktopServices.openUrl(QUrl("ms-settings:batterysaver"))
+            ),
+            spacing=8,
+        )
+        flyout.follow(self.changed, content, update)
+        return content
 
     def paint(self, painter: QPainter, rect: QRectF, text_color: QColor, scale: float) -> None:
         """The Windows battery icon (filled to the level), then the numbers."""
