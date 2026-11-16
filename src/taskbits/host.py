@@ -1,14 +1,16 @@
 """The window that lives inside the taskbar and draws the placed widgets.
 
 This module only *displays* things and reports what the user did (clicks,
-the ✕ in edit mode, drops). The controller (:mod:`taskbits.app`) decides what
+the ✕ in edit mode, drags). The controller (:mod:`taskbits.app`) decides what
 happens and owns the layout.
 
-Edit mode (while the main window is open):
-    * every widget gets an outline and an ✕ badge at its top-left corner;
-    * empty cells are shown as dashed outlines, so you can see where to drop;
-    * the whole row is painted (not colour-keyed), so drops land on us
-      instead of falling through to the taskbar.
+Edit mode (while the main window is the active window):
+    * every widget gets an outline and an ✕ badge at its top-right corner;
+    * widgets can be dragged along the row to change their order; the others
+      slide out of the way while dragging;
+    * empty cells are shown as dashed outlines;
+    * the whole row is painted (not colour-keyed), so drops from the main
+      window land on us instead of falling through to the taskbar.
 """
 
 from __future__ import annotations
@@ -28,10 +30,10 @@ from PySide6.QtGui import (
     QPaintEvent,
     QPen,
 )
-from PySide6.QtWidgets import QMenu, QToolTip, QWidget
+from PySide6.QtWidgets import QApplication, QMenu, QToolTip, QWidget
 
 from taskbits import taskbar
-from taskbits.layout import Layout, Placement
+from taskbits.layout import Item, Layout
 from taskbits.sizing import Metrics
 from taskbits.widgets.base import Widget
 
@@ -44,7 +46,7 @@ DARK_TASKBAR = QColor(0x1C, 0x1C, 0x1C)  # Windows 11 dark taskbar, no transpare
 LIGHT_TASKBAR = QColor(0xEE, 0xEE, 0xEE)
 DARK_THEME_TEXT = QColor(255, 255, 255)
 LIGHT_THEME_TEXT = QColor(0, 0, 0, 228)
-CORNER_RADIUS = 5
+CORNER_RADIUS = 6
 BADGE_SIZE = 14  # the ✕ circle, at the default taskbar height
 
 
@@ -65,9 +67,10 @@ def decode_drag(data: bytes) -> tuple[str, int] | None:
 class TaskbarHost(QWidget):
     """Frameless, never-focused window showing a row of widgets."""
 
-    widget_clicked = Signal(int)  # start cell of the clicked widget
-    remove_requested = Signal(int)  # start cell whose ✕ was clicked
-    drop_requested = Signal(str, int)  # widget id, start cell
+    widget_clicked = Signal(object)  # Item
+    remove_requested = Signal(object)  # Item whose ✕ was clicked
+    move_requested = Signal(object, int)  # Item, new index in the order
+    drop_requested = Signal(str, int)  # widget id from the gallery, index in the order
     edit_requested = Signal()
     quit_requested = Signal()
 
@@ -91,17 +94,25 @@ class TaskbarHost(QWidget):
         self.resize(metrics.total_width, metrics.height)
 
         self._layout = Layout(metrics.capacity)
-        self._widgets: dict[int, Widget] = {}
+        self._widgets: dict[Item, Widget] = {}
         self._edit_mode = False
         self._light_theme = False
-        self._hover_start: int | None = None
-        self._pressed_start: int | None = None
-        self._drop_target: Placement | None = None  # where a dragged widget would land
+        self._hover: Item | None = None
+        self._pressed: Item | None = None
+        self._press_x = 0.0
+
+        # While dragging, ``_preview`` is the layout as it would be after the
+        # drop and ``_target`` the item whose slot gets highlighted.
+        self._preview: Layout | None = None
+        self._target: Item | None = None
+        self._moving: Item | None = None  # a placed widget being dragged along the row
+        self._grab_dx = 0.0  # cursor x minus the moving widget's left edge
+        self._move_x = 0.0
 
     # --- state set by the controller -------------------------------------------
 
-    def set_items(self, layout: Layout, widgets: dict[int, Widget]) -> None:
-        """Show these widgets (keyed by start cell) at the positions in ``layout``."""
+    def set_items(self, layout: Layout, widgets: dict[Item, Widget]) -> None:
+        """Show ``layout``; ``widgets`` maps each item to its running widget."""
         for widget in self._widgets.values():
             widget.changed.disconnect(self.update)
         self._layout = layout
@@ -114,11 +125,18 @@ class TaskbarHost(QWidget):
         """Show or hide the outlines, ✕ badges and empty-cell placeholders."""
         if enabled != self._edit_mode:
             self._edit_mode = enabled
+            if not enabled:
+                self._cancel_drag()
             self.update()
 
     @property
     def edit_mode(self) -> bool:
         return self._edit_mode
+
+    @property
+    def dragging(self) -> bool:
+        """True while a widget is being dragged over or along the row."""
+        return self._preview is not None
 
     def set_light_theme(self, light: bool) -> None:
         """Dark text for a light taskbar, white text for a dark one."""
@@ -133,20 +151,26 @@ class TaskbarHost(QWidget):
 
     # --- geometry ---------------------------------------------------------------
 
-    def widget_rect(self, start: int, size: int) -> QRectF:
+    def cell_rect(self, start: int, size: int) -> QRectF:
         """Area of a widget starting at cell ``start``, ``size`` cells wide."""
         m = self.metrics
         return QRectF(m.cell_x(start), m.margin, m.widget_width(size), m.height - 2 * m.margin)
 
-    def badge_rect(self, placement: Placement) -> QRectF:
-        """The ✕ circle at the top-left corner of a widget."""
-        rect = self.widget_rect(placement.start, placement.size)
+    def _badge_rect(self, rect: QRectF) -> QRectF:
+        """The ✕ circle at the top-right corner of a widget area."""
         size = BADGE_SIZE * self.metrics.scale
-        return QRectF(rect.left() + 2, rect.top() + 2, size, size)
+        return QRectF(rect.right() - 2 - size, rect.top() + 2, size, size)
 
-    def _placement_at(self, x: float) -> Placement | None:
+    def _on_badge(self, item: Item, pos: QPointF) -> bool:
+        placement = self._layout.placement_of(item)
+        if placement is None:
+            return False
+        badge = self._badge_rect(self.cell_rect(placement.start, placement.size))
+        return badge.adjusted(-3, -3, 3, 3).contains(pos)  # generous: the badge is small
+
+    def _item_at(self, x: float) -> Item | None:
         cell = self.metrics.cell_at(x)
-        return self._layout.widget_at(cell) if cell is not None else None
+        return self._layout.item_at(cell) if cell is not None else None
 
     def sync_hover(self, local_x: float | None) -> None:
         """Set the hover highlight from a cursor x position (None = outside).
@@ -154,10 +178,9 @@ class TaskbarHost(QWidget):
         Called periodically by the controller, because a window that is never
         activated does not always get a "mouse left" event.
         """
-        placement = self._placement_at(local_x) if local_x is not None else None
-        start = placement.start if placement else None
-        if start != self._hover_start:
-            self._hover_start = start
+        item = self._item_at(local_x) if local_x is not None else None
+        if item is not self._hover:
+            self._hover = item
             self.update()
 
     # --- painting ---------------------------------------------------------------
@@ -176,6 +199,7 @@ class TaskbarHost(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         text = self._text_color()
+        shown = self._preview or self._layout
 
         # 1. Background. Key-coloured pixels become transparent *and click-through*
         #    once embedded, so anything that must react to the mouse gets a colour
@@ -186,57 +210,67 @@ class TaskbarHost(QWidget):
         if self._edit_mode:
             painter.fillRect(QRectF(0, 0, self.metrics.total_width, self.height()), solid)
         else:
-            for placement in self._layout.placements:
-                painter.fillRect(self.widget_rect(placement.start, placement.size), solid)
+            for placement in shown.placements:
+                painter.fillRect(self.cell_rect(placement.start, placement.size), solid)
 
-        # 2. Edit mode: dashed outlines on empty cells.
+        # 2. Edit mode: dashed outlines on the free cells.
         if self._edit_mode:
-            pen = QPen(self._with_alpha(text, 0.35), 1, Qt.PenStyle.DashLine)
-            painter.setPen(pen)
+            painter.setPen(QPen(self._with_alpha(text, 0.35), 1, Qt.PenStyle.DashLine))
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            for cell in range(self.metrics.capacity):
-                if self._layout.widget_at(cell) is None:
-                    rect = self.widget_rect(cell, 1).adjusted(0.5, 0.5, -0.5, -0.5)
-                    painter.drawRoundedRect(rect, CORNER_RADIUS, CORNER_RADIUS)
-
-        # 3. Where a dragged widget would land.
-        if self._drop_target is not None:
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(self._with_alpha(text, 0.18))
-            rect = self.widget_rect(self._drop_target.start, self._drop_target.size)
-            painter.drawRoundedRect(rect, CORNER_RADIUS, CORNER_RADIUS)
-
-        # 4. The widgets themselves.
-        for placement in self._layout.placements:
-            widget = self._widgets.get(placement.start)
-            rect = self.widget_rect(placement.start, placement.size)
-            if placement.start == self._hover_start and not self._edit_mode:
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(self._with_alpha(text, 0.05 if self._pressed_start is not None else 0.09))
+            for cell in range(shown.used_cells(), self.metrics.capacity):
+                rect = self.cell_rect(cell, 1).adjusted(0.5, 0.5, -0.5, -0.5)
                 painter.drawRoundedRect(rect, CORNER_RADIUS, CORNER_RADIUS)
-            if widget is not None:
-                painter.save()
-                painter.setClipRect(rect)
-                content = rect
-                if self._edit_mode:
-                    # Make room for the ✕ badge so it doesn't cover the accent bar.
-                    content = rect.adjusted(BADGE_SIZE * self.metrics.scale * 0.6, 0, 0, 0)
-                try:
-                    widget.paint(painter, content, text, self.metrics.scale)
-                except Exception:  # a broken widget must not break the whole row
-                    log.exception("Widget %s failed to paint", placement.widget_id)
-                painter.restore()
-            if self._edit_mode:
-                self._paint_edit_decorations(painter, placement, text)
 
-    def _paint_edit_decorations(self, painter: QPainter, placement: Placement, text: QColor) -> None:
-        """Outline around the widget and the ✕ badge at its top-left corner."""
-        rect = self.widget_rect(placement.start, placement.size).adjusted(0.5, 0.5, -0.5, -0.5)
+        # 3. The widgets, in their (possibly previewed) positions.
+        for placement in shown.placements:
+            rect = self.cell_rect(placement.start, placement.size)
+            if placement.item is self._target:
+                # Where the dragged widget will land.
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(self._with_alpha(text, 0.16))
+                painter.drawRoundedRect(rect, CORNER_RADIUS, CORNER_RADIUS)
+                continue
+            if placement.item is self._hover and not self._edit_mode:
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(self._with_alpha(text, 0.05 if self._pressed else 0.09))
+                painter.drawRoundedRect(rect, CORNER_RADIUS, CORNER_RADIUS)
+            self._paint_widget(painter, placement.item, rect, text)
+
+        # 4. The widget being moved follows the cursor, on top of everything.
+        if self._moving is not None:
+            width = self.metrics.widget_width(self._moving.size)
+            left = min(max(0.0, self._move_x - self._grab_dx), self.metrics.total_width - width)
+            rect = QRectF(left, self.metrics.margin, width, self.metrics.height - 2 * self.metrics.margin)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(solid)  # hide whatever is underneath
+            painter.drawRoundedRect(rect, CORNER_RADIUS, CORNER_RADIUS)
+            self._paint_widget(painter, self._moving, rect, text)
+
+    def _paint_widget(self, painter: QPainter, item: Item, rect: QRectF, text: QColor) -> None:
+        """Draw one widget in ``rect``, plus its edit-mode outline and ✕."""
+        widget = self._widgets.get(item)
+        if widget is not None:
+            painter.save()
+            painter.setClipRect(rect)
+            content = rect
+            if self._edit_mode:
+                # Keep the text clear of the ✕ badge on the right.
+                content = rect.adjusted(0, 0, -BADGE_SIZE * self.metrics.scale * 0.8, 0)
+            try:
+                widget.paint(painter, content, text, self.metrics.scale)
+            except Exception:  # a broken widget must not break the whole row
+                log.exception("Widget %s failed to paint", item.widget_id)
+            painter.restore()
+        if self._edit_mode:
+            self._paint_edit_decorations(painter, rect, text)
+
+    def _paint_edit_decorations(self, painter: QPainter, rect: QRectF, text: QColor) -> None:
+        """Outline around the widget area ``rect`` and the ✕ badge at its top-right corner."""
         painter.setPen(QPen(self._with_alpha(text, 0.6), 1))
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRoundedRect(rect, CORNER_RADIUS, CORNER_RADIUS)
+        painter.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), CORNER_RADIUS, CORNER_RADIUS)
 
-        badge = self.badge_rect(placement)
+        badge = self._badge_rect(rect)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(text)
         painter.drawEllipse(badge)
@@ -249,34 +283,79 @@ class TaskbarHost(QWidget):
         painter.drawLine(cross.topLeft(), cross.bottomRight())
         painter.drawLine(cross.topRight(), cross.bottomLeft())
 
-    # --- mouse ------------------------------------------------------------------
-
-    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        self.sync_hover(event.position().x())
-
-    def leaveEvent(self, event: QEvent) -> None:  # noqa: N802
-        self.sync_hover(None)
+    # --- mouse: clicks, ✕, and moving widgets along the row -----------------------
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
-            placement = self._placement_at(event.position().x())
-            self._pressed_start = placement.start if placement else None
+            self._press_x = event.position().x()
+            self._pressed = self._item_at(self._press_x)
             self.update()
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        x = event.position().x()
+        if self._moving is None and self._should_start_move(event):
+            self._start_move(self._pressed)
+        if self._moving is not None:
+            self._move_x = x
+            self._update_move_preview()
+            return
+        self.sync_hover(x)
+
+    def _should_start_move(self, event: QMouseEvent) -> bool:
+        """In edit mode, pressing a widget (not its ✕) and moving far enough starts a move."""
+        if not self._edit_mode or self._pressed is None:
+            return False
+        if not event.buttons() & Qt.MouseButton.LeftButton:
+            return False
+        if self._on_badge(self._pressed, QPointF(self._press_x, event.position().y())):
+            return False
+        return abs(event.position().x() - self._press_x) >= QApplication.startDragDistance()
+
+    def _start_move(self, item: Item) -> None:
+        placement = self._layout.placement_of(item)
+        self._moving = item
+        self._grab_dx = self._press_x - self.metrics.cell_x(placement.start)
+        self.setCursor(Qt.CursorShape.ClosedHandCursor)
+
+    def _update_move_preview(self) -> None:
+        """Re-order the preview so the moving widget's slot is under its centre."""
+        assert self._moving is not None
+        preview = self._layout.copy()
+        preview.remove(self._moving)
+        centre = self._move_x - self._grab_dx + self.metrics.widget_width(self._moving.size) / 2
+        preview.items.insert(preview.insertion_index(self.metrics.cells_at(centre)), self._moving)
+        self._preview, self._target = preview, self._moving
+        self.update()
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() != Qt.MouseButton.LeftButton:
             return
-        pressed, self._pressed_start = self._pressed_start, None
+        pressed, self._pressed = self._pressed, None
+        if self._moving is not None:
+            moving, preview = self._moving, self._preview
+            self._cancel_drag()
+            if preview is not None:
+                self.move_requested.emit(moving, preview.items.index(moving))
+            return
         self.update()
-        placement = self._placement_at(event.position().x())
-        if placement is None or placement.start != pressed:
+        item = self._item_at(event.position().x())
+        if item is None or item is not pressed:
             return  # released somewhere else: cancel, like a normal button
         if self._edit_mode:
-            # Generous hit area: the badge is small.
-            if self.badge_rect(placement).adjusted(-3, -3, 3, 3).contains(event.position()):
-                self.remove_requested.emit(placement.start)
+            if self._on_badge(item, event.position()):
+                self.remove_requested.emit(item)
         else:
-            self.widget_clicked.emit(placement.start)
+            self.widget_clicked.emit(item)
+
+    def leaveEvent(self, event: QEvent) -> None:  # noqa: N802
+        self.sync_hover(None)
+
+    def _cancel_drag(self) -> None:
+        self._moving = None
+        self._preview = None
+        self._target = None
+        self.unsetCursor()
+        self.update()
 
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:  # noqa: N802
         menu = QMenu(self)
@@ -289,8 +368,8 @@ class TaskbarHost(QWidget):
 
     def event(self, event: QEvent) -> bool:  # noqa: A003
         if event.type() == QEvent.Type.ToolTip and not self._edit_mode:
-            placement = self._placement_at(event.pos().x())
-            widget = self._widgets.get(placement.start) if placement else None
+            item = self._item_at(event.pos().x())
+            widget = self._widgets.get(item) if item else None
             text = widget.tooltip() if widget else ""
             if text:
                 QToolTip.showText(QCursor.pos(), text, self)
@@ -299,7 +378,7 @@ class TaskbarHost(QWidget):
             return True
         return super().event(event)
 
-    # --- drag and drop ------------------------------------------------------------
+    # --- drag and drop from the main window ---------------------------------------
 
     def _drag_x(self, event: QDropEvent) -> float:
         """Horizontal drop position in our own logical pixels.
@@ -314,37 +393,39 @@ class TaskbarHost(QWidget):
                 return cursor[0] / self.devicePixelRatioF()
         return event.position().x()
 
-    def _target_for(self, event: QDropEvent) -> tuple[str, Placement] | None:
+    def _update_drop_preview(self, event: QDropEvent) -> bool:
+        """Preview where a gallery widget would be inserted; False if it can't be."""
         payload = decode_drag(event.mimeData().data(MIME_TYPE).data())
-        if payload is None:
-            return None
+        if payload is None or not self._layout.can_add(payload[1]):
+            self._preview, self._target = None, None
+            return False
         widget_id, size = payload
-        cell = self.metrics.cell_at(self._drag_x(event))
-        start = self._layout.start_near(cell, size) if cell is not None else None
-        return (widget_id, Placement(widget_id, start, size)) if start is not None else None
+        preview = self._layout.copy()
+        index = preview.insertion_index(self.metrics.cells_at(self._drag_x(event)))
+        self._target = preview.add(widget_id, size, index)
+        self._preview = preview
+        return True
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:  # noqa: N802
-        if event.mimeData().hasFormat(MIME_TYPE):
+        ours = event.mimeData().hasFormat(MIME_TYPE)
+        log.info("Drag entered the taskbar row (a Taskbits widget: %s)", ours)
+        if ours:
             event.acceptProposedAction()  # accept now; dragMoveEvent decides per position
 
     def dragMoveEvent(self, event: QDragMoveEvent) -> None:  # noqa: N802
-        target = self._target_for(event)
-        self._drop_target = target[1] if target else None
-        if target:
+        if self._update_drop_preview(event):
             event.acceptProposedAction()
         else:
             event.ignore()
         self.update()
 
     def dragLeaveEvent(self, event: QEvent) -> None:  # noqa: N802
-        self._drop_target = None
-        self.update()
+        self._cancel_drag()
 
     def dropEvent(self, event: QDropEvent) -> None:  # noqa: N802
-        target = self._target_for(event)
-        self._drop_target = None
-        self.update()
-        if target:
+        ok = self._update_drop_preview(event)
+        target, preview = self._target, self._preview
+        self._cancel_drag()
+        if ok and target is not None and preview is not None:
             event.acceptProposedAction()
-            widget_id, placement = target
-            self.drop_requested.emit(widget_id, placement.start)
+            self.drop_requested.emit(target.widget_id, preview.items.index(target))

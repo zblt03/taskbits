@@ -26,3 +26,9 @@ def test_cell_at() -> None:
     assert m.cell_at(m.cell_x(3) + 10) == 3
     assert m.cell_at(m.total_width + 50) is None
     assert m.cell_at(-1) is None
+
+
+def test_cells_at() -> None:
+    m = metrics_for(48)
+    assert m.cells_at(0) == 0
+    assert m.cells_at(m.cell_x(2)) == 2

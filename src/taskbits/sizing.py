@@ -44,6 +44,10 @@ class Metrics:
         """Width of the whole row of cells."""
         return self.widget_width(self.capacity)
 
+    def cells_at(self, x: float) -> float:
+        """Horizontal position ``x`` measured in cells (1.5 = middle of cell 1)."""
+        return x / (self.unit + self.gap)
+
     def cell_at(self, x: float) -> int | None:
         """The cell under horizontal position ``x`` (gaps count as the cell to their left)."""
         if x < 0:

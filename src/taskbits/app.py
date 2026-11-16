@@ -5,7 +5,7 @@
 * A tray icon reopens the main window (there may be nothing on the taskbar to
   right-click) and quits the app.
 
-While the main window is open, the taskbar host is in edit mode.
+While the main window is the active window, the taskbar host is in edit mode.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from taskbits import paths, taskbar
 from taskbits.gallery import MainWindow
 from taskbits.host import TaskbarHost
 from taskbits.icon import app_icon
-from taskbits.layout import Layout
+from taskbits.layout import Item, Layout
 from taskbits.sizing import Metrics, metrics_for
 from taskbits.widgets import catalog
 from taskbits.widgets.base import Widget
@@ -43,9 +43,9 @@ class App(QObject):
         super().__init__()
         self.embed = embed
         self.layout = self._load_layout()
-        self.widgets: dict[int, Widget] = {}  # start cell -> running widget
-        for placement in self.layout.placements:
-            self._start_widget(placement.widget_id, placement.start)
+        self.widgets: dict[Item, Widget] = {}  # each item on the taskbar -> its running widget
+        for item in self.layout.items:
+            self._start_widget(item)
 
         self.metrics = self._current_metrics()
         self.host = self._create_host()
@@ -54,7 +54,7 @@ class App(QObject):
         self.window = MainWindow([widget_class() for widget_class in catalog.available()])
         self.window.setWindowIcon(app_icon())
         self.window.add_requested.connect(lambda widget_id: self.add_widget(widget_id))
-        self.window.closed.connect(lambda: self.host.set_edit_mode(False))
+        self.window.activation_changed.connect(self._update_edit_mode)
 
         self.tray = self._create_tray()
 
@@ -90,55 +90,72 @@ class App(QObject):
         except OSError:
             log.exception("Could not save the layout")
 
-    def _start_widget(self, widget_id: str, start: int) -> None:
-        widget = catalog.create(widget_id)
+    def _start_widget(self, item: Item) -> None:
+        widget = catalog.create(item.widget_id)
         if widget is not None:
-            self.widgets[start] = widget
+            self.widgets[item] = widget
 
-    def add_widget(self, widget_id: str, start: int | None = None) -> None:
-        """Put a widget on the taskbar: at ``start``, or in the first gap that fits."""
+    def add_widget(self, widget_id: str, index: int | None = None) -> None:
+        """Put a widget on the taskbar at position ``index`` (default: after the others)."""
         widget_class = catalog.find(widget_id)
         if widget_class is None:
             return
-        placement = self.layout.add(widget_id, widget_class.size, start)
-        if placement is None:
+        item = self.layout.add(widget_id, widget_class.size, index)
+        if item is None:
             log.info("No room for %s (%d wide)", widget_id, widget_class.size)
             return
-        log.info("Added %s at cell %d", widget_id, placement.start)
-        self._start_widget(widget_id, placement.start)
+        log.info("Added %s at position %d", widget_id, self.layout.items.index(item))
+        self._start_widget(item)
         self._layout_changed()
 
-    def remove_widget(self, cell: int) -> None:
-        """Take the widget covering ``cell`` off the taskbar."""
-        placement = self.layout.remove(cell)
-        if placement is None:
+    def remove_widget(self, item: Item) -> None:
+        """Take a widget off the taskbar; the ones to its right slide left."""
+        if not self.layout.remove(item):
             return
-        log.info("Removed %s from cell %d", placement.widget_id, placement.start)
-        widget = self.widgets.pop(placement.start, None)
+        log.info("Removed %s", item.widget_id)
+        widget = self.widgets.pop(item, None)
         if widget is not None:
             widget.stop()
             widget.deleteLater()
         self._layout_changed()
+
+    def move_widget(self, item: Item, index: int) -> None:
+        """Change a widget's position in the row (from dragging it in edit mode)."""
+        if self.layout.move(item, index):
+            log.info("Moved %s to position %d", item.widget_id, index)
+            self._layout_changed()
 
     def _layout_changed(self) -> None:
         self._save_layout()
         self.host.set_items(self.layout, self.widgets)
         self.window.update_space(self.layout)
 
-    def _on_widget_clicked(self, start: int) -> None:
-        widget = self.widgets.get(start)
+    def _on_widget_clicked(self, item: Item) -> None:
+        widget = self.widgets.get(item)
         if widget is not None:
             widget.clicked()
 
     # --- main window and tray ----------------------------------------------------------
 
     def open_main_window(self) -> None:
-        """Show the gallery and put the taskbar in edit mode."""
+        """Show the gallery (which puts the taskbar in edit mode while it is active)."""
         self.window.update_space(self.layout)
-        self.window.show()
+        self.window.showNormal()
         self.window.raise_()
         self.window.activateWindow()
-        self.host.set_edit_mode(True)
+
+    def _update_edit_mode(self) -> None:
+        """Edit mode is on while the main window is the active window.
+
+        It also stays on while the cursor is over the taskbar row or a drag is
+        in progress: clicking an x badge or dragging there may take the focus
+        away from the main window for a moment, and the decorations must not
+        vanish under the pointer.
+        """
+        window_active = self.window.isVisible() and self.window.isActiveWindow()
+        over_host = taskbar.cursor_in_window(int(self.host.winId())) is not None
+        keep = self.host.edit_mode and self.window.isVisible() and (over_host or self.host.dragging)
+        self.host.set_edit_mode(window_active or keep)
 
     def _create_tray(self) -> QSystemTrayIcon:
         tray = QSystemTrayIcon(app_icon(), self)
@@ -172,11 +189,13 @@ class App(QObject):
         host = TaskbarHost(self.metrics, embedded=self.embed)
         host.widget_clicked.connect(self._on_widget_clicked)
         host.remove_requested.connect(self.remove_widget)
+        host.move_requested.connect(self.move_widget)
         host.drop_requested.connect(self.add_widget)
         host.edit_requested.connect(self.open_main_window)
         host.quit_requested.connect(QApplication.quit)
         host.set_items(self.layout, self.widgets)
-        host.set_edit_mode(self.window.isVisible() if hasattr(self, "window") else False)
+        if hasattr(self, "window"):  # not on the very first call, from __init__
+            host.set_edit_mode(self.window.isActiveWindow())
         return host
 
     def _replace_host(self) -> None:
@@ -263,6 +282,7 @@ class App(QObject):
                 return  # Explorer not running yet; try again next tick
             self._show_host()
 
+        self._update_edit_mode()
         hwnd = int(self.host.winId())
         if self.embed:
             cursor = taskbar.cursor_in_window(hwnd)

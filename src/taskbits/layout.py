@@ -1,13 +1,14 @@
-"""Where widgets sit on the taskbar: a row of cells. Pure logic, no Qt, no I/O.
+"""Which widgets are on the taskbar, in what order. Pure logic, no Qt, no I/O.
 
 The taskbar area is a row of ``capacity`` cells (4 by default). A widget is 1
-or 2 cells wide and occupies that many *adjacent* cells. Removing a widget
-leaves a gap, which the next added widget can fill.
+or 2 cells wide. Widgets are always packed to the left with no gaps between
+them, like icons on a phone: removing one slides the others left, and
+dragging one changes the *order*.
 
 Example with capacity 4::
 
     cells:   0       1       2       3
-           [clock] [   calendar    ] [ ]      <- cell 3 is free
+           [clock] [   calendar    ] [ ]      <- one cell still free
 """
 
 from __future__ import annotations
@@ -22,99 +23,131 @@ MAX_UNITS = 4
 WIDGET_SIZES = (1, 2)
 
 
-@dataclass(frozen=True)
-class Placement:
-    """One widget on the taskbar: which widget, first cell, and width in cells."""
+@dataclass(eq=False)
+class Item:
+    """One widget on the taskbar.
+
+    Compared by identity (``eq=False``): two clocks are two different items,
+    so an item can be used as a dictionary key for its running widget.
+    """
 
     widget_id: str
-    start: int
     size: int
+
+
+@dataclass(frozen=True)
+class Placement:
+    """Where an item currently sits: its first cell."""
+
+    item: Item
+    start: int
+
+    @property
+    def size(self) -> int:
+        return self.item.size
 
     @property
     def end(self) -> int:
         """One past the last occupied cell."""
-        return self.start + self.size
+        return self.start + self.item.size
 
     def covers(self, cell: int) -> bool:
-        """True if this widget occupies ``cell``."""
+        """True if this item occupies ``cell``."""
         return self.start <= cell < self.end
 
 
 class Layout:
-    """The widgets placed on the taskbar, with rules for adding and removing."""
+    """The ordered row of widgets on the taskbar."""
 
     def __init__(self, capacity: int = MAX_UNITS) -> None:
         self.capacity = capacity
-        self._placements: list[Placement] = []
+        self.items: list[Item] = []  # left to right
+
+    def copy(self) -> Layout:
+        """A shallow copy (same items, independent order), for previews while dragging."""
+        layout = Layout(self.capacity)
+        layout.items = list(self.items)
+        return layout
 
     @property
     def placements(self) -> list[Placement]:
-        """Placed widgets, left to right (a copy: change them with add/remove)."""
-        return sorted(self._placements, key=lambda p: p.start)
+        """Every item with its start cell, left to right, packed with no gaps."""
+        result = []
+        start = 0
+        for item in self.items:
+            result.append(Placement(item, start))
+            start += item.size
+        return result
 
-    def widget_at(self, cell: int) -> Placement | None:
-        """The widget covering ``cell``, or None if the cell is free."""
-        for placement in self._placements:
-            if placement.covers(cell):
+    def placement_of(self, item: Item) -> Placement | None:
+        """Where ``item`` sits, or None if it is not in this layout."""
+        for placement in self.placements:
+            if placement.item is item:
                 return placement
         return None
 
+    def item_at(self, cell: int) -> Item | None:
+        """The item covering ``cell``, or None if the cell is free."""
+        for placement in self.placements:
+            if placement.covers(cell):
+                return placement.item
+        return None
+
+    def used_cells(self) -> int:
+        return sum(item.size for item in self.items)
+
     def free_cells(self) -> int:
-        """How many cells are still empty."""
-        return self.capacity - sum(p.size for p in self._placements)
+        """How many cells are still empty (always at the right end)."""
+        return self.capacity - self.used_cells()
 
-    def fits(self, start: int, size: int) -> bool:
-        """True if cells ``start`` … ``start + size - 1`` exist and are all free."""
-        if start < 0 or start + size > self.capacity:
-            return False
-        return all(self.widget_at(cell) is None for cell in range(start, start + size))
+    def can_add(self, size: int) -> bool:
+        """True if a widget ``size`` cells wide still fits."""
+        return size <= self.free_cells()
 
-    def first_fit(self, size: int) -> int | None:
-        """Leftmost start cell where a widget of ``size`` fits, or None if none."""
-        for start in range(self.capacity):
-            if self.fits(start, size):
-                return start
-        return None
+    def insertion_index(self, position: float) -> int:
+        """Where in the order something dropped at ``position`` should go.
 
-    def start_near(self, cell: int, size: int) -> int | None:
-        """Where to put a widget dropped on ``cell``, or None if it can't go there.
-
-        A 2-wide widget dropped on the right half of a gap is shifted one cell
-        left, so dropping it anywhere on a 2-cell gap works.
+        ``position`` is measured in cells (1.5 = the middle of cell 1). The
+        new widget goes after every item whose centre is left of it.
         """
-        for start in (cell, cell - 1) if size == 2 else (cell,):
-            if self.fits(start, size):
-                return start
-        return None
+        index = 0
+        for placement in self.placements:
+            if placement.start + placement.size / 2 <= position:
+                index += 1
+        return index
 
-    def add(self, widget_id: str, size: int, start: int | None = None) -> Placement | None:
-        """Place a widget at ``start`` (or the first gap that fits). None if it doesn't fit."""
+    def add(self, widget_id: str, size: int, index: int | None = None) -> Item | None:
+        """Insert a widget at ``index`` in the order (default: at the end).
+
+        Returns the new item, or None if there is not enough room.
+        """
         if size not in WIDGET_SIZES:
             raise ValueError(f"widget size must be 1 or 2, not {size}")
-        if start is None:
-            start = self.first_fit(size)
-        if start is None or not self.fits(start, size):
+        if not self.can_add(size):
             return None
-        placement = Placement(widget_id, start, size)
-        self._placements.append(placement)
-        return placement
+        item = Item(widget_id, size)
+        self.items.insert(len(self.items) if index is None else index, item)
+        return item
 
-    def remove(self, cell: int) -> Placement | None:
-        """Remove the widget covering ``cell`` and return it (None if the cell was free)."""
-        placement = self.widget_at(cell)
-        if placement is not None:
-            self._placements.remove(placement)
-        return placement
+    def remove(self, item: Item) -> bool:
+        """Take ``item`` out; the items to its right slide left. False if not present."""
+        if item not in self.items:
+            return False
+        self.items.remove(item)
+        return True
+
+    def move(self, item: Item, index: int) -> bool:
+        """Move ``item`` to position ``index`` in the order (counted without the item)."""
+        if not self.remove(item):
+            return False
+        self.items.insert(min(index, len(self.items)), item)
+        return True
 
     # --- saving -----------------------------------------------------------------
 
     def to_json(self) -> dict[str, Any]:
         """Data for layout.json."""
-        return {
-            "widgets": [
-                {"id": p.widget_id, "start": p.start, "size": p.size} for p in self.placements
-            ]
-        }
+        return {"widgets": [{"id": item.widget_id, "size": item.size} for item in self.items]}
 
     @classmethod
     def from_json(cls, data: Any, capacity: int = MAX_UNITS) -> Layout:
@@ -123,10 +156,10 @@ class Layout:
         entries = data.get("widgets", []) if isinstance(data, dict) else []
         for entry in entries:
             try:
-                widget_id, start, size = str(entry["id"]), int(entry["start"]), int(entry["size"])
+                widget_id, size = str(entry["id"]), int(entry["size"])
             except (KeyError, TypeError, ValueError):
                 log.warning("layout: ignoring malformed entry %r", entry)
                 continue
-            if size not in WIDGET_SIZES or layout.add(widget_id, size, start) is None:
-                log.warning("layout: %s does not fit at cell %s; ignored", widget_id, start)
+            if size not in WIDGET_SIZES or layout.add(widget_id, size) is None:
+                log.warning("layout: %s (size %s) does not fit; ignored", widget_id, size)
         return layout
