@@ -1,6 +1,6 @@
 """Filesystem locations used by the app.
 
-Everything Taskbits writes lives in ``%LOCALAPPDATA%\taskbits\`` so it never
+Everything Taskbits writes lives in the ``taskbits`` folder under ``%LOCALAPPDATA%``, so it never
 ends up inside the git repo.
 """
 
