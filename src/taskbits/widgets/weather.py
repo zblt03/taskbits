@@ -39,36 +39,37 @@ SUN_COLOR = QColor("#F9AB00")
 NIGHT_COLOR = QColor("#8AB4F8")
 RAIN_COLOR = QColor("#4285F4")
 
-# WMO weather codes used by Open-Meteo, grouped into short descriptions.
+# WMO weather codes used by Open-Meteo, as short words that fit a 1-wide
+# widget (tests/test_weather.py measures them with the real font).
 WEATHER_CODES: dict[int, str] = {
     0: "Clear",
-    1: "Mostly clear",
-    2: "Partly cloudy",
+    1: "Fair",
+    2: "Clouds",
     3: "Cloudy",
     45: "Fog",
     48: "Fog",
     51: "Drizzle",
     53: "Drizzle",
     55: "Drizzle",
-    56: "Icy drizzle",
-    57: "Icy drizzle",
-    61: "Light rain",
+    56: "Sleet",
+    57: "Sleet",
+    61: "Rain",
     63: "Rain",
-    65: "Heavy rain",
-    66: "Icy rain",
-    67: "Icy rain",
-    71: "Light snow",
+    65: "Pouring",
+    66: "Sleet",
+    67: "Sleet",
+    71: "Flurries",
     73: "Snow",
-    75: "Heavy snow",
-    77: "Snow grains",
-    80: "Showers",
-    81: "Showers",
-    82: "Heavy showers",
-    85: "Snow showers",
-    86: "Snow showers",
-    95: "Thunderstorm",
-    96: "Thunderstorm",
-    99: "Thunderstorm",
+    75: "Snow",
+    77: "Snow",
+    80: "Shower",
+    81: "Shower",
+    82: "Pouring",
+    85: "Snow",
+    86: "Snow",
+    95: "Storm",
+    96: "Storm",
+    99: "Storm",
 }
 RAIN_CODES = set(range(51, 68)) | set(range(80, 83)) | {95, 96, 99}
 
@@ -92,7 +93,7 @@ def describe(code: int, is_day: bool = True) -> str:
     """Short text for a WMO weather code ("Sunny" during the day for code 0)."""
     if code == 0:
         return "Sunny" if is_day else "Clear"
-    return WEATHER_CODES.get(code, "Unknown")
+    return WEATHER_CODES.get(code, "?")
 
 
 def format_temperature(value: float) -> str:

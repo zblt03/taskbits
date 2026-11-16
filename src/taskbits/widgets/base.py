@@ -45,6 +45,11 @@ def make_font(pixel_size: float) -> QFont:
     return font
 
 
+def text_space(widget_width: float, scale: float = 1.0) -> float:
+    """How wide the text may be in a widget ``widget_width`` px wide (after bar and padding)."""
+    return widget_width - (PADDING_X + BAR_WIDTH + BAR_GAP + PADDING_X / 2) * scale
+
+
 class Widget(QObject):
     """Base class for taskbar widgets.
 
@@ -105,7 +110,7 @@ class Widget(QObject):
         painter.drawRoundedRect(bar, bar_width / 2, bar_width / 2)
 
         text_x = bar.right() + BAR_GAP * scale
-        text_width = rect.right() - text_x - PADDING_X * scale / 2
+        text_width = text_space(rect.width(), scale)
         painter.setPen(text_color)
         painter.setFont(heading_font)
         painter.drawText(

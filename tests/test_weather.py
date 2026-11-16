@@ -4,8 +4,13 @@ from pathlib import Path
 
 import pytest
 
+from PySide6.QtGui import QFontMetricsF, QGuiApplication
+
+from taskbits.host import BADGE_SIZE
 from taskbits.settings import load_widget_settings, save_widget_settings
-from taskbits.widgets.weather import describe, format_temperature, parse_forecast, parse_geocoding
+from taskbits.sizing import metrics_for
+from taskbits.widgets.base import DETAIL_PX, make_font, text_space
+from taskbits.widgets.weather import WEATHER_CODES, describe, format_temperature, parse_forecast, parse_geocoding
 
 FORECAST = {
     "current": {"temperature_2m": 17.6, "weather_code": 2, "is_day": 1},
@@ -17,7 +22,7 @@ def test_parse_forecast() -> None:
     weather = parse_forecast(FORECAST)
     assert (weather.temperature, weather.code, weather.is_day) == (17.6, 2, True)
     assert (weather.high, weather.low) == (21.2, 8.9)
-    assert weather.description == "Partly cloudy"
+    assert weather.description == "Clouds"
 
 
 def test_parse_forecast_without_daily_values() -> None:
@@ -33,8 +38,8 @@ def test_parse_forecast_rejects_bad_data() -> None:
 def test_describe() -> None:
     assert describe(0, is_day=True) == "Sunny"
     assert describe(0, is_day=False) == "Clear"
-    assert describe(95) == "Thunderstorm"
-    assert describe(12345) == "Unknown"
+    assert describe(95) == "Storm"
+    assert describe(12345) == "?"
 
 
 def test_format_temperature() -> None:
@@ -62,3 +67,14 @@ def test_corrupt_settings_file_gives_defaults(tmp_path: Path) -> None:
     path = tmp_path / "settings.json"
     path.write_text("{not json", encoding="utf-8")
     assert load_widget_settings("weather", path) == {}
+
+
+def test_every_description_fits_a_one_wide_widget() -> None:
+    app = QGuiApplication.instance() or QGuiApplication([])  # fonts need an application
+    assert app is not None
+    metrics = QFontMetricsF(make_font(DETAIL_PX))
+    # The smallest common taskbar, in edit mode (the x badge takes some room).
+    space = text_space(metrics_for(44).unit) - BADGE_SIZE * 0.8
+    words = set(WEATHER_CODES.values()) | {describe(0, is_day=True)}
+    too_long = [word for word in words if metrics.horizontalAdvance(word) > space]
+    assert not too_long, f"wider than {space:.0f} px: {too_long}"
