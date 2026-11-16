@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "taskbits"
+version = "0.1.0"
+description = "Small widgets for the Windows 11 taskbar"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Nacho" }]
+requires-python = ">=3.14"
+
+[project.scripts]
+taskbits = "taskbits.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
