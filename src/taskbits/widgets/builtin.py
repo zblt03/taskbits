@@ -1,6 +1,6 @@
 """Built-in widgets.
 
-System, Battery, Focus timer and Clock are real. Calendar, Weather and Now
+System, Battery, Focus timer, Weather and Clock are real. Calendar and Now
 playing still show placeholder data; each gets real data in a later step.
 Larger widgets live in their own modules and are imported here.
 """
@@ -16,6 +16,7 @@ from taskbits.widgets.base import Widget
 from taskbits.widgets.battery import BatteryWidget
 from taskbits.widgets.focus import FocusWidget
 from taskbits.widgets.system import SystemWidget
+from taskbits.widgets.weather import WeatherWidget
 
 
 class CalendarWidget(Widget):
@@ -49,19 +50,6 @@ class ClockWidget(Widget):
 
     def stop(self) -> None:
         self._timer.stop()
-
-
-class WeatherWidget(Widget):
-    id = "weather"
-    name = "Weather"
-    description = "Temperature and conditions where you are."
-    size = 1
-
-    def lines(self) -> tuple[str, str]:
-        return "18°", "Sunny"  # fake
-
-    def accent(self) -> QColor | None:
-        return QColor("#F9AB00")
 
 
 

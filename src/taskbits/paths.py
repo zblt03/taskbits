@@ -25,6 +25,11 @@ def layout_path() -> Path:
     return data_dir() / "layout.json"
 
 
+def settings_path() -> Path:
+    """Per-widget settings (e.g. the weather location)."""
+    return data_dir() / "settings.json"
+
+
 def log_path() -> Path:
     """Path of the rotating log file."""
     return data_dir() / "taskbits.log"
