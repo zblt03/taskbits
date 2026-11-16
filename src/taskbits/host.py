@@ -359,6 +359,18 @@ class TaskbarHost(QWidget):
 
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:  # noqa: N802
         menu = QMenu(self)
+        item = self._item_at(event.pos().x())
+        widget = self._widgets.get(item) if item else None
+        if widget is not None:
+            actions = []
+            try:
+                actions = widget.menu_actions()
+            except Exception:  # a broken widget must not break the menu
+                log.exception("Widget %s failed to build its menu", item.widget_id)
+            for label, action in actions:
+                menu.addAction(label, action)
+            if actions:
+                menu.addSeparator()
         menu.addAction("Edit widgets…", self.edit_requested.emit)
         menu.addSeparator()
         menu.addAction("Quit Taskbits", self.quit_requested.emit)

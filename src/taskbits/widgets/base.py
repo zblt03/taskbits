@@ -19,6 +19,7 @@ Widgets that need custom drawing can override ``paint()`` instead.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import ClassVar
 
 from PySide6.QtCore import QObject, QPointF, QRectF, Qt, Signal
@@ -73,6 +74,10 @@ class Widget(QObject):
 
     def clicked(self) -> None:
         """Called when the user clicks the widget (outside edit mode)."""
+
+    def menu_actions(self) -> list[tuple[str, Callable[[], None]]]:
+        """Extra right-click menu entries as (label, function) pairs."""
+        return []
 
     def stop(self) -> None:
         """Called when the widget is removed: stop timers, threads, etc."""

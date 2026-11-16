@@ -1,8 +1,8 @@
 """Built-in widgets.
 
-For now these are placeholders with fake data, to build the gallery and the
-taskbar layout. Each will get real data in a later phase. The clock is real
-because it needs nothing else.
+System, Battery, Focus timer and Clock are real. Calendar, Weather and Now
+playing still show placeholder data; each gets real data in a later step.
+Larger widgets live in their own modules and are imported here.
 """
 
 from __future__ import annotations
@@ -13,6 +13,9 @@ from PySide6.QtCore import QTimer
 from PySide6.QtGui import QColor
 
 from taskbits.widgets.base import Widget
+from taskbits.widgets.battery import BatteryWidget
+from taskbits.widgets.focus import FocusWidget
+from taskbits.widgets.system import SystemWidget
 
 
 class CalendarWidget(Widget):
@@ -61,18 +64,6 @@ class WeatherWidget(Widget):
         return QColor("#F9AB00")
 
 
-class SystemWidget(Widget):
-    id = "system"
-    name = "System"
-    description = "CPU and memory usage."
-    size = 1
-
-    def lines(self) -> tuple[str, str]:
-        return "CPU 12%", "RAM 48%"  # fake
-
-    def accent(self) -> QColor | None:
-        return QColor("#34A853")
-
 
 class MusicWidget(Widget):
     id = "music"
@@ -87,27 +78,6 @@ class MusicWidget(Widget):
         return QColor("#E8453C")
 
 
-class BatteryWidget(Widget):
-    id = "battery"
-    name = "Battery"
-    description = "Charge level and time left."
-    size = 1
-
-    def lines(self) -> tuple[str, str]:
-        return "85%", "Charging"  # fake
-
-
-class FocusWidget(Widget):
-    id = "focus"
-    name = "Focus timer"
-    description = "A Pomodoro timer: click to start."
-    size = 1
-
-    def lines(self) -> tuple[str, str]:
-        return "25:00", "Focus"  # fake
-
-    def accent(self) -> QColor | None:
-        return QColor("#A142F4")
 
 
 BUILTIN_WIDGETS: list[type[Widget]] = [
