@@ -22,7 +22,7 @@ from PySide6.QtGui import QColor, QDesktopServices, QPainter
 from PySide6.QtWidgets import QInputDialog, QMessageBox
 
 from taskbits import __version__, settings
-from taskbits.widgets.base import Widget
+from taskbits.widgets.base import Widget, emit_from_thread
 from taskbits.widgets.drawing import PADDING_X, Sky, background_for, draw_two_lines, draw_weather_icon
 
 log = logging.getLogger(__name__)
@@ -226,9 +226,9 @@ class WeatherWidget(Widget):
             weather = fetch_weather(latitude, longitude)
         except Exception:  # network/format errors must never crash the app
             log.warning("Fetching the weather failed", exc_info=True)
-            self._failed.emit()
+            emit_from_thread(self._failed)
         else:
-            self._fetched.emit(weather)
+            emit_from_thread(self._fetched, weather)
 
     def _on_fetched(self, weather: Weather) -> None:
         self._busy = False

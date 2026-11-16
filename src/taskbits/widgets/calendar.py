@@ -23,7 +23,7 @@ from PySide6.QtGui import QColor, QDesktopServices, QPainter
 from taskbits import paths, settings
 from taskbits.google import auth, calendar_client
 from taskbits.google.events import Event, format_time_range, select_event
-from taskbits.widgets.base import BAR_GAP, BAR_WIDTH, Widget
+from taskbits.widgets.base import BAR_GAP, BAR_WIDTH, Widget, emit_from_thread
 from taskbits.widgets.drawing import PADDING_X, dimmed, draw_two_lines, draw_vertical_bar
 
 log = logging.getLogger(__name__)
@@ -137,15 +137,15 @@ class CalendarWidget(Widget):
             creds = auth.get_credentials(allow_login=allow_login)
             events = calendar_client.fetch_events(creds, datetime.now().astimezone(), excluded)
         except auth.ReauthRequiredError:
-            self._reauth_needed.emit()
+            emit_from_thread(self._reauth_needed)
         except auth.CredentialsMissingError:
             log.error("No Google OAuth client (credentials.json) found")
-            self._credentials_missing.emit()
+            emit_from_thread(self._credentials_missing)
         except Exception:  # network/API errors must never crash the app
             log.exception("Fetching calendar events failed")
-            self._fetch_failed.emit()
+            emit_from_thread(self._fetch_failed)
         else:
-            self._fetch_succeeded.emit(events)
+            emit_from_thread(self._fetch_succeeded, events)
 
     # --- results (UI thread) ----------------------------------------------------
 

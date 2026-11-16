@@ -21,15 +21,27 @@ Widgets that need custom drawing can override ``paint()`` instead; the helpers i
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import ClassVar
+from typing import Any, ClassVar
 
-from PySide6.QtCore import QObject, QRectF, Qt, Signal
+from PySide6.QtCore import QObject, QRectF, Qt, Signal, SignalInstance
 from PySide6.QtGui import QColor, QPainter
 
 from taskbits.widgets.drawing import PADDING_X, draw_two_lines
 
 BAR_WIDTH = 3  # the accent bar of the default look, at a 48 px taskbar
 BAR_GAP = 7
+
+
+def emit_from_thread(signal: SignalInstance, *args: Any) -> None:
+    """Emit ``signal`` from a background thread, ignoring a widget that is already gone.
+
+    A widget can be removed while its worker thread is still downloading; the
+    thread then finds the Qt object deleted, which is harmless.
+    """
+    try:
+        signal.emit(*args)
+    except RuntimeError:  # "Signal source has been deleted"
+        pass
 
 
 class Widget(QObject):
