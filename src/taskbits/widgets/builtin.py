@@ -44,7 +44,7 @@ class ClockWidget(Widget):
         """The time in large digits with the date underneath."""
         heading, detail = self.lines()
         text = rect.adjusted(PADDING_X * scale * 1.5, 0, -PADDING_X * scale / 2, 0)
-        draw_two_lines(painter, text, heading, detail, text_color, scale, heading_px=17, detail_px=11)
+        draw_two_lines(painter, text, heading, detail, text_color, scale, heading_px=16, detail_px=11)
 
     def stop(self) -> None:
         self._timer.stop()

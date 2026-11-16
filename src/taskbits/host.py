@@ -47,7 +47,6 @@ LIGHT_TASKBAR = QColor(0xEE, 0xEE, 0xEE)
 DARK_THEME_TEXT = QColor(255, 255, 255)
 LIGHT_THEME_TEXT = QColor(0, 0, 0, 228)
 CORNER_RADIUS = 6
-BADGE_SIZE = 14  # the ✕ circle, at the default taskbar height
 
 
 def encode_drag(widget_id: str, size: int) -> bytes:
@@ -91,13 +90,14 @@ class TaskbarHost(QWidget):
         self.metrics = metrics
         self.embedded = embedded
         # Fixed size: once embedded, Qt must never resize the window (see CLAUDE.md).
-        self.resize(metrics.total_width, metrics.height)
+        self.resize(metrics.window_width, metrics.height)
 
         self._layout = Layout(metrics.capacity)
         self._widgets: dict[Item, Widget] = {}
         self._edit_mode = False
         self._light_theme = False
         self._hover: Item | None = None
+        self._pressed_badge: Item | None = None  # the ✕ under the last left press
         self._pressed: Item | None = None
         self._press_x = 0.0
 
@@ -157,16 +157,23 @@ class TaskbarHost(QWidget):
         return QRectF(m.cell_x(start), m.margin, m.widget_width(size), m.height - 2 * m.margin)
 
     def _badge_rect(self, rect: QRectF) -> QRectF:
-        """The ✕ circle at the top-right corner of a widget area."""
-        size = BADGE_SIZE * self.metrics.scale
-        return QRectF(rect.right() - 2 - size, rect.top() + 2, size, size)
+        """The ✕ circle, centred exactly on the top-right corner of a widget area."""
+        size = self.metrics.badge_size
+        return QRectF(rect.right() - size / 2, rect.top() - size / 2, size, size)
 
-    def _on_badge(self, item: Item, pos: QPointF) -> bool:
-        placement = self._layout.placement_of(item)
-        if placement is None:
-            return False
-        badge = self._badge_rect(self.cell_rect(placement.start, placement.size))
-        return badge.adjusted(-3, -3, 3, 3).contains(pos)  # generous: the badge is small
+    def _badge_at(self, pos: QPointF) -> Item | None:
+        """The widget whose ✕ is under ``pos`` (edit mode only), or None.
+
+        Checked before the cells, because a ✕ sticks out over the gap and the
+        next widget.
+        """
+        if not self._edit_mode:
+            return None
+        for placement in self._layout.placements:
+            badge = self._badge_rect(self.cell_rect(placement.start, placement.size))
+            if badge.adjusted(-3, -3, 3, 3).contains(pos):  # generous: the badge is small
+                return placement.item
+        return None
 
     def _item_at(self, x: float) -> Item | None:
         cell = self.metrics.cell_at(x)
@@ -208,7 +215,7 @@ class TaskbarHost(QWidget):
         solid = QColor(key.red() + (-1 if key.red() > 127 else 1), key.green(), key.blue())
         painter.fillRect(self.rect(), key)
         if self._edit_mode:
-            painter.fillRect(QRectF(0, 0, self.metrics.total_width, self.height()), solid)
+            painter.fillRect(QRectF(0, 0, self.width(), self.height()), solid)
         else:
             for placement in shown.placements:
                 painter.fillRect(self.cell_rect(placement.start, placement.size), solid)
@@ -236,7 +243,13 @@ class TaskbarHost(QWidget):
                 painter.drawRoundedRect(rect, CORNER_RADIUS, CORNER_RADIUS)
             self._paint_widget(painter, placement.item, rect, text)
 
-        # 4. The widget being moved follows the cursor, on top of everything.
+        # 4. The ✕ badges last, so they sit on top of the neighbouring widget.
+        if self._edit_mode:
+            for placement in shown.placements:
+                if placement.item is not self._target:
+                    self._paint_badge(painter, self.cell_rect(placement.start, placement.size), text)
+
+        # 5. The widget being moved follows the cursor, on top of everything.
         if self._moving is not None:
             width = self.metrics.widget_width(self._moving.size)
             left = min(max(0.0, self._move_x - self._grab_dx), self.metrics.total_width - width)
@@ -245,31 +258,26 @@ class TaskbarHost(QWidget):
             painter.setBrush(solid)  # hide whatever is underneath
             painter.drawRoundedRect(rect, CORNER_RADIUS, CORNER_RADIUS)
             self._paint_widget(painter, self._moving, rect, text)
+            self._paint_badge(painter, rect, text)
 
     def _paint_widget(self, painter: QPainter, item: Item, rect: QRectF, text: QColor) -> None:
-        """Draw one widget in ``rect``, plus its edit-mode outline and ✕."""
+        """Draw one widget in ``rect``, plus its edit-mode outline."""
         widget = self._widgets.get(item)
         if widget is not None:
             painter.save()
             painter.setClipRect(rect)
-            content = rect
-            if self._edit_mode:
-                # Keep the text clear of the ✕ badge on the right.
-                content = rect.adjusted(0, 0, -BADGE_SIZE * self.metrics.scale * 0.8, 0)
             try:
-                widget.paint(painter, content, text, self.metrics.scale)
+                widget.paint(painter, rect, text, self.metrics.scale)
             except Exception:  # a broken widget must not break the whole row
                 log.exception("Widget %s failed to paint", item.widget_id)
             painter.restore()
         if self._edit_mode:
-            self._paint_edit_decorations(painter, rect, text)
+            painter.setPen(QPen(self._with_alpha(text, 0.6), 1))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), CORNER_RADIUS, CORNER_RADIUS)
 
-    def _paint_edit_decorations(self, painter: QPainter, rect: QRectF, text: QColor) -> None:
-        """Outline around the widget area ``rect`` and the ✕ badge at its top-right corner."""
-        painter.setPen(QPen(self._with_alpha(text, 0.6), 1))
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), CORNER_RADIUS, CORNER_RADIUS)
-
+    def _paint_badge(self, painter: QPainter, rect: QRectF, text: QColor) -> None:
+        """The ✕ badge on the top-right corner of the widget area ``rect``."""
         badge = self._badge_rect(rect)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(text)
@@ -288,7 +296,8 @@ class TaskbarHost(QWidget):
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
             self._press_x = event.position().x()
-            self._pressed = self._item_at(self._press_x)
+            self._pressed_badge = self._badge_at(event.position())
+            self._pressed = self._pressed_badge or self._item_at(self._press_x)
             self.update()
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
@@ -307,7 +316,7 @@ class TaskbarHost(QWidget):
             return False
         if not event.buttons() & Qt.MouseButton.LeftButton:
             return False
-        if self._on_badge(self._pressed, QPointF(self._press_x, event.position().y())):
+        if self._pressed_badge is not None:
             return False
         return abs(event.position().x() - self._press_x) >= QApplication.startDragDistance()
 
@@ -338,13 +347,15 @@ class TaskbarHost(QWidget):
                 self.move_requested.emit(moving, preview.items.index(moving))
             return
         self.update()
-        item = self._item_at(event.position().x())
-        if item is None or item is not pressed:
-            return  # released somewhere else: cancel, like a normal button
+        pressed_badge, self._pressed_badge = self._pressed_badge, None
         if self._edit_mode:
-            if self._on_badge(item, event.position()):
-                self.remove_requested.emit(item)
-        else:
+            # In edit mode only the ✕ reacts to a click (pressed and released on it).
+            badge = self._badge_at(event.position())
+            if badge is not None and badge is pressed_badge:
+                self.remove_requested.emit(badge)
+            return
+        item = self._item_at(event.position().x())
+        if item is not None and item is pressed:  # released elsewhere: cancel, like a button
             self.widget_clicked.emit(item)
 
     def leaveEvent(self, event: QEvent) -> None:  # noqa: N802

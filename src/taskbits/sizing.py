@@ -12,7 +12,7 @@ from taskbits.layout import MAX_UNITS
 
 UNIT_ASPECT = 1.75  # a 1-wide widget is this many times wider than the taskbar is tall
 GAP_RATIO = 1 / 12  # space between cells, as a fraction of the taskbar height
-MARGIN_RATIO = 1 / 12  # space above and below widgets (Windows leaves a gap too)
+MARGIN_RATIO = 1 / 8  # space above and below widgets; also room for the edit-mode ✕
 REFERENCE_HEIGHT = 48  # the default Windows 11 taskbar height at 100 %
 
 
@@ -38,6 +38,19 @@ class Metrics:
     def widget_width(self, size: int) -> int:
         """Width of a widget ``size`` cells wide (it also covers the gaps between them)."""
         return size * self.unit + (size - 1) * self.gap
+
+    @property
+    def badge_size(self) -> int:
+        """Diameter of the edit-mode ✕, centred on a widget's top-right corner.
+
+        Twice the margin, so the half that sticks out above the widget still fits.
+        """
+        return 2 * self.margin
+
+    @property
+    def window_width(self) -> int:
+        """Width of the host window: all cells plus room for the last widget's ✕."""
+        return self.total_width + self.badge_size // 2 + 1
 
     @property
     def total_width(self) -> int:
