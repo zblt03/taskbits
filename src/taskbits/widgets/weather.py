@@ -17,12 +17,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from PySide6.QtCore import QTimer, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices
+from PySide6.QtCore import QRectF, QTimer, QUrl, Signal
+from PySide6.QtGui import QColor, QDesktopServices, QPainter
 from PySide6.QtWidgets import QInputDialog, QMessageBox
 
 from taskbits import __version__, settings
 from taskbits.widgets.base import Widget
+from taskbits.widgets.drawing import PADDING_X, Sky, background_for, draw_two_lines, draw_weather_icon
 
 log = logging.getLogger(__name__)
 
@@ -72,6 +73,25 @@ WEATHER_CODES: dict[int, str] = {
     99: "Storm",
 }
 RAIN_CODES = set(range(51, 68)) | set(range(80, 83)) | {95, 96, 99}
+SNOW_CODES = set(range(71, 78)) | {85, 86}
+STORM_CODES = {95, 96, 99}
+
+
+def sky_for(code: int, is_day: bool = True) -> Sky:
+    """Which icon to draw for a WMO weather code."""
+    if code == 0:
+        return Sky.SUN if is_day else Sky.MOON
+    if code in (1, 2):
+        return Sky.PARTLY_SUN if is_day else Sky.PARTLY_MOON
+    if code in (45, 48):
+        return Sky.FOG
+    if code in STORM_CODES:
+        return Sky.STORM
+    if code in SNOW_CODES:
+        return Sky.SNOW
+    if code in RAIN_CODES:
+        return Sky.RAIN
+    return Sky.CLOUD
 
 
 @dataclass(frozen=True)
@@ -228,6 +248,21 @@ class WeatherWidget(Widget):
         if self._weather is None:
             return ("Weather", "Offline") if self._failed_last else ("Weather", "Loading…")
         return format_temperature(self._weather.temperature), self._weather.description
+
+    def paint(self, painter: QPainter, rect: QRectF, text_color: QColor, scale: float) -> None:
+        """Weather icon on the left, the temperature large, today's high / low below."""
+        weather = self._weather
+        if weather is None:
+            super().paint(painter, rect, text_color, scale)
+            return
+        size = 22 * scale
+        icon = QRectF(rect.left() + PADDING_X * scale, rect.center().y() - size / 2, size, size)
+        draw_weather_icon(painter, icon, sky_for(weather.code, weather.is_day), text_color, background_for(text_color))
+        detail = weather.description
+        if weather.high is not None and weather.low is not None:
+            detail = f"{format_temperature(weather.high)} {format_temperature(weather.low)}"
+        text = rect.adjusted(size + (PADDING_X + 6) * scale, 0, -PADDING_X * scale / 2, 0)
+        draw_two_lines(painter, text, format_temperature(weather.temperature), detail, text_color, scale, 16, 11)
 
     def accent(self) -> QColor | None:
         if self._weather is None:

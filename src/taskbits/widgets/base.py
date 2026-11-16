@@ -14,7 +14,8 @@ The simplest widget sets the class attributes and implements ``lines()``::
         def lines(self) -> tuple[str, str]:
             return "Hello", "world"
 
-Widgets that need custom drawing can override ``paint()`` instead.
+Widgets that need custom drawing can override ``paint()`` instead; the helpers in
+:mod:`taskbits.widgets.drawing` (icons, bars, rings) make that short.
 """
 
 from __future__ import annotations
@@ -22,32 +23,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import ClassVar
 
-from PySide6.QtCore import QObject, QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter
+from PySide6.QtCore import QObject, QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QPainter
 
-FONT_FAMILIES = ["Segoe UI Variable", "Segoe UI"]
-FONT_WEIGHT = 550  # between Regular and Semibold (variable "wght" axis)
-HEADING_PX = 13  # at the default 48 px taskbar; scaled for other heights
-DETAIL_PX = 12
-PADDING_X = 8
-BAR_WIDTH = 3
+from taskbits.widgets.drawing import PADDING_X, draw_two_lines
+
+BAR_WIDTH = 3  # the accent bar of the default look, at a 48 px taskbar
 BAR_GAP = 7
-
-
-def make_font(pixel_size: float) -> QFont:
-    """Segoe UI Variable at the widget weight, falling back to Segoe UI."""
-    font = QFont()
-    font.setFamilies(FONT_FAMILIES)
-    font.setPixelSize(max(8, round(pixel_size)))
-    font.setVariableAxis(QFont.Tag("wght"), FONT_WEIGHT)
-    font.setVariableAxis(QFont.Tag("opsz"), font.pixelSize() * 0.75)  # optical size in points
-    font.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
-    return font
-
-
-def text_space(widget_width: float, scale: float = 1.0) -> float:
-    """How wide the text may be in a widget ``widget_width`` px wide (after bar and padding)."""
-    return widget_width - (PADDING_X + BAR_WIDTH + BAR_GAP + PADDING_X / 2) * scale
 
 
 class Widget(QObject):
@@ -97,29 +79,10 @@ class Widget(QObject):
             scale: taskbar height / 48, to size fonts and spacing.
         """
         heading, detail = self.lines()
-        heading_font, detail_font = make_font(HEADING_PX * scale), make_font(DETAIL_PX * scale)
-        heading_metrics, detail_metrics = QFontMetricsF(heading_font), QFontMetricsF(detail_font)
-
-        block = heading_metrics.height() + (detail_metrics.height() if detail else 0)
-        top = rect.top() + (rect.height() - block) / 2
-
         bar_width = BAR_WIDTH * scale
-        bar = QRectF(rect.left() + PADDING_X * scale, top + 2, bar_width, block - 4)
+        bar = QRectF(rect.left() + PADDING_X * scale, rect.center().y() - 13 * scale, bar_width, 26 * scale)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(self.accent() or text_color)
         painter.drawRoundedRect(bar, bar_width / 2, bar_width / 2)
-
-        text_x = bar.right() + BAR_GAP * scale
-        text_width = text_space(rect.width(), scale)
-        painter.setPen(text_color)
-        painter.setFont(heading_font)
-        painter.drawText(
-            QPointF(text_x, round(top + heading_metrics.ascent())),
-            heading_metrics.elidedText(heading, Qt.TextElideMode.ElideRight, text_width),
-        )
-        if detail:
-            painter.setFont(detail_font)
-            painter.drawText(
-                QPointF(text_x, round(top + heading_metrics.height() + detail_metrics.ascent())),
-                detail_metrics.elidedText(detail, Qt.TextElideMode.ElideRight, text_width),
-            )
+        text = rect.adjusted(bar.right() - rect.left() + BAR_GAP * scale, 0, -PADDING_X * scale / 2, 0)
+        draw_two_lines(painter, text, heading, detail, text_color, scale)

@@ -6,10 +6,11 @@ import ctypes
 from ctypes import wintypes
 from dataclasses import dataclass
 
-from PySide6.QtCore import QTimer
-from PySide6.QtGui import QColor
+from PySide6.QtCore import QRectF, QTimer
+from PySide6.QtGui import QColor, QPainter
 
 from taskbits.widgets.base import Widget
+from taskbits.widgets.drawing import battery_glyph, draw_icon_and_lines
 
 UPDATE_INTERVAL_MS = 30_000
 LOW_PERCENT = 20
@@ -32,22 +33,22 @@ class PowerStatus:
 
 
 def format_duration(seconds: int) -> str:
-    """'2 h 05 min' or '45 min'."""
+    """'2h 05m' or '45 min' (short enough for a 1-wide widget)."""
     hours, minutes = divmod(seconds // 60, 60)
-    return f"{hours} h {minutes:02d} min" if hours else f"{minutes} min"
+    return f"{hours}h {minutes:02d}m" if hours else f"{minutes} min"
 
 
 def battery_lines(status: PowerStatus) -> tuple[str, str]:
     """The two lines the widget shows for ``status``."""
     if not status.has_battery:
-        return "No battery", "Plugged in" if status.plugged_in else ""
+        return "No battery", "On AC" if status.plugged_in else ""
     level = f"{status.percent}%" if status.percent is not None else "?%"
     if status.charging:
         return level, "Charging"
     if status.plugged_in:
-        return level, "Plugged in"
+        return level, "On AC"
     if status.seconds_left is not None:
-        return level, f"{format_duration(status.seconds_left)} left"
+        return level, format_duration(status.seconds_left)
     return level, "On battery"
 
 
@@ -113,6 +114,21 @@ class BatteryWidget(Widget):
         if status.percent is not None and status.percent <= LOW_PERCENT:
             return LOW_COLOR
         return None
+
+    def tooltip(self) -> str:
+        status = self._status
+        if status is None or not status.has_battery or status.seconds_left is None:
+            return ""
+        return f"{format_duration(status.seconds_left)} left"
+
+    def paint(self, painter: QPainter, rect: QRectF, text_color: QColor, scale: float) -> None:
+        """The Windows battery icon (filled to the level), then the numbers."""
+        heading, detail = self.lines()
+        status = self._status
+        glyph = None
+        if status is not None and status.has_battery:
+            glyph = battery_glyph(status.percent or 0, status.charging)
+        draw_icon_and_lines(painter, rect, scale, text_color, heading, detail, glyph, self.accent(), 15, 11)
 
     def stop(self) -> None:
         self._timer.stop()

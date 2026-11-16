@@ -17,13 +17,14 @@ from datetime import datetime
 from enum import Enum, auto
 from typing import Any
 
-from PySide6.QtCore import QTimer, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices
+from PySide6.QtCore import QRectF, QTimer, QUrl, Signal
+from PySide6.QtGui import QColor, QDesktopServices, QPainter
 
 from taskbits import paths, settings
 from taskbits.google import auth, calendar_client
 from taskbits.google.events import Event, format_time_range, select_event
-from taskbits.widgets.base import Widget
+from taskbits.widgets.base import BAR_GAP, BAR_WIDTH, Widget
+from taskbits.widgets.drawing import PADDING_X, dimmed, draw_two_lines, draw_vertical_bar
 
 log = logging.getLogger(__name__)
 
@@ -33,6 +34,24 @@ REFRESH_MS = 5 * 60_000
 RETRY_MS = 30_000  # while offline
 RESELECT_MS = 30_000  # switch to the right event on time, no API call
 CALENDAR_BLUE = QColor("#4285F4")
+COUNTDOWN_MINUTES = 60  # show "in 15 min" when the next event is this close
+
+
+def progress(event: Event, now: datetime) -> float:
+    """How much of ``event`` has passed: 0 before it starts, 1 after it ends."""
+    total = (event.end - event.start).total_seconds()
+    if total <= 0:
+        return 1.0
+    return max(0.0, min(1.0, (now - event.start).total_seconds() / total))
+
+
+def countdown(event: Event, now: datetime) -> str | None:
+    """'in 15 min' / 'now' when ``event`` starts within the hour, else None."""
+    seconds = (event.start - now).total_seconds()
+    if seconds < 0 or seconds > COUNTDOWN_MINUTES * 60:
+        return None
+    minutes = int(seconds // 60) + (1 if seconds % 60 else 0)  # round up
+    return f"in {minutes} min" if minutes > 0 else "now"
 
 
 class State(Enum):
@@ -185,6 +204,23 @@ class CalendarWidget(Widget):
         if event is not None and event.calendar_color and self._settings().get("use_calendar_color", True):
             return QColor(event.calendar_color)
         return CALENDAR_BLUE
+
+    def paint(self, painter: QPainter, rect: QRectF, text_color: QColor, scale: float) -> None:
+        """Accent bar that drains as the event runs, the time (with a countdown) and the title."""
+        heading, detail, event = self._display()
+        now = datetime.now().astimezone()
+        color = self.accent() or text_color
+        fraction = 1.0
+        if event is not None and event.start <= now:
+            fraction = progress(event, now)
+        elif event is not None and (soon := countdown(event, now)) is not None:
+            heading = f"{heading} · {soon}"
+        width, height = BAR_WIDTH * scale, 26 * scale
+        bar = QRectF(rect.left() + PADDING_X * scale, rect.center().y() - height / 2, width, height)
+        # The bright part is the time left: it drains downwards as the event runs.
+        draw_vertical_bar(painter, bar, 1 - fraction, color, dimmed(color, 0.3))
+        text = rect.adjusted(PADDING_X * scale + width + BAR_GAP * scale, 0, -PADDING_X * scale / 2, 0)
+        draw_two_lines(painter, text, heading, detail, text_color, scale)
 
     def tooltip(self) -> str:
         _, _, event = self._display()

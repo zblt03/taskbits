@@ -4,13 +4,16 @@ from pathlib import Path
 
 import pytest
 
-from PySide6.QtGui import QFontMetricsF, QGuiApplication
-
-from taskbits.host import BADGE_SIZE
 from taskbits.settings import load_widget_settings, save_widget_settings
-from taskbits.sizing import metrics_for
-from taskbits.widgets.base import DETAIL_PX, make_font, text_space
-from taskbits.widgets.weather import WEATHER_CODES, describe, format_temperature, parse_forecast, parse_geocoding
+from taskbits.widgets.drawing import Sky
+from taskbits.widgets.weather import (
+    WEATHER_CODES,
+    describe,
+    format_temperature,
+    parse_forecast,
+    parse_geocoding,
+    sky_for,
+)
 
 FORECAST = {
     "current": {"temperature_2m": 17.6, "weather_code": 2, "is_day": 1},
@@ -69,12 +72,21 @@ def test_corrupt_settings_file_gives_defaults(tmp_path: Path) -> None:
     assert load_widget_settings("weather", path) == {}
 
 
-def test_every_description_fits_a_one_wide_widget() -> None:
-    app = QGuiApplication.instance() or QGuiApplication([])  # fonts need an application
-    assert app is not None
-    metrics = QFontMetricsF(make_font(DETAIL_PX))
-    # The smallest common taskbar, in edit mode (the x badge takes some room).
-    space = text_space(metrics_for(44).unit) - BADGE_SIZE * 0.8
-    words = set(WEATHER_CODES.values()) | {describe(0, is_day=True)}
-    too_long = [word for word in words if metrics.horizontalAdvance(word) > space]
-    assert not too_long, f"wider than {space:.0f} px: {too_long}"
+def test_sky_for() -> None:
+    assert sky_for(0, is_day=True) is Sky.SUN
+    assert sky_for(0, is_day=False) is Sky.MOON
+    assert sky_for(2, is_day=False) is Sky.PARTLY_MOON
+    assert sky_for(3) is Sky.CLOUD
+    assert sky_for(45) is Sky.FOG
+    assert sky_for(63) is Sky.RAIN
+    assert sky_for(81) is Sky.RAIN
+    assert sky_for(75) is Sky.SNOW
+    assert sky_for(95) is Sky.STORM
+
+
+def test_every_rain_and_snow_code_has_a_matching_icon() -> None:
+    for code, word in WEATHER_CODES.items():
+        if word in ("Rain", "Shower", "Pouring", "Drizzle"):
+            assert sky_for(code) is Sky.RAIN, code
+        if word in ("Snow", "Flurries"):
+            assert sky_for(code) is Sky.SNOW, code

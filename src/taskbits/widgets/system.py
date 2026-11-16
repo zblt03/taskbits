@@ -7,16 +7,18 @@ import logging
 from ctypes import wintypes
 from dataclasses import dataclass
 
-from PySide6.QtCore import QTimer
-from PySide6.QtGui import QColor
+from PySide6.QtCore import QRectF, QTimer
+from PySide6.QtGui import QColor, QPainter
 
 from taskbits.widgets.base import Widget
+from taskbits.widgets.drawing import PADDING_X, dimmed, draw_two_lines, draw_vertical_bar
 
 log = logging.getLogger(__name__)
 
 UPDATE_INTERVAL_MS = 2_000
 BUSY_COLOR = QColor("#E8453C")  # accent when the CPU is almost maxed out
 NORMAL_COLOR = QColor("#34A853")
+MEMORY_COLOR = QColor("#4F8EF7")
 BUSY_THRESHOLD = 90
 
 
@@ -122,6 +124,19 @@ class SystemWidget(Widget):
             return f"CPU {self._cpu}%"
         percent, used, total = self._memory
         return f"CPU {self._cpu}%\nMemory {used:.1f} of {total:.1f} GB ({percent}%)"
+
+    def paint(self, painter: QPainter, rect: QRectF, text_color: QColor, scale: float) -> None:
+        """Two small vertical meters (CPU, RAM) next to the numbers."""
+        width, gap, height = 3 * scale, 2.5 * scale, 26 * scale
+        top = rect.center().y() - height / 2
+        left = rect.left() + PADDING_X * scale
+        memory = self._memory[0] if self._memory else 0
+        track = dimmed(text_color, 0.2)
+        draw_vertical_bar(painter, QRectF(left, top, width, height), self._cpu / 100, self.accent(), track)
+        draw_vertical_bar(painter, QRectF(left + width + gap, top, width, height), memory / 100, MEMORY_COLOR, track)
+        heading, detail = self.lines()
+        text = rect.adjusted(2 * width + gap + (PADDING_X + 6) * scale, 0, -PADDING_X * scale / 2, 0)
+        draw_two_lines(painter, text, heading, detail, text_color, scale)
 
     def stop(self) -> None:
         self._timer.stop()

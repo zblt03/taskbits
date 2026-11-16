@@ -11,10 +11,19 @@ import time
 from collections.abc import Callable
 from enum import Enum
 
-from PySide6.QtCore import QTimer
-from PySide6.QtGui import QColor
+from PySide6.QtCore import QRectF, QTimer
+from PySide6.QtGui import QColor, QPainter
 
 from taskbits.widgets.base import Widget
+from taskbits.widgets.drawing import (
+    GLYPH_PAUSE,
+    GLYPH_PLAY,
+    PADDING_X,
+    dimmed,
+    draw_glyph,
+    draw_ring,
+    draw_two_lines,
+)
 
 FOCUS_SECONDS = 25 * 60
 BREAK_SECONDS = 5 * 60
@@ -128,6 +137,24 @@ class FocusWidget(Widget):
         self._pomodoro.reset()
         self._timer.stop()
         self.changed.emit()
+
+    def paint(self, painter: QPainter, rect: QRectF, text_color: QColor, scale: float) -> None:
+        """A ring that empties as the phase runs out, with play/pause inside."""
+        timer = self._pomodoro
+        fraction = timer.remaining(time.monotonic()) / timer.durations[timer.phase]
+        size = 24 * scale
+        ring = QRectF(rect.left() + PADDING_X * scale, rect.center().y() - size / 2, size, size)
+        draw_ring(painter, ring, fraction, self.accent(), dimmed(text_color, 0.2), 2.5 * scale)
+        icon = 9 * scale
+        draw_glyph(
+            painter,
+            GLYPH_PAUSE if timer.running else GLYPH_PLAY,
+            QRectF(ring.center().x() - icon / 2, ring.center().y() - icon / 2, icon, icon),
+            text_color,
+        )
+        heading, detail = self.lines()
+        text = rect.adjusted(size + (PADDING_X + 7) * scale, 0, -PADDING_X * scale / 2, 0)
+        draw_two_lines(painter, text, heading, detail, text_color, scale, heading_px=15, detail_px=11)
 
     def stop(self) -> None:
         self._timer.stop()

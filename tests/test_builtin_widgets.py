@@ -30,16 +30,16 @@ def status(**changes: object) -> PowerStatus:
 
 def test_battery_lines() -> None:
     assert battery_lines(status(charging=True, plugged_in=True)) == ("85%", "Charging")
-    assert battery_lines(status(plugged_in=True)) == ("85%", "Plugged in")
-    assert battery_lines(status(seconds_left=2 * 3600 + 5 * 60)) == ("85%", "2 h 05 min left")
+    assert battery_lines(status(plugged_in=True)) == ("85%", "On AC")
+    assert battery_lines(status(seconds_left=2 * 3600 + 5 * 60)) == ("85%", "2h 05m")
     assert battery_lines(status()) == ("85%", "On battery")
     assert battery_lines(status(percent=None)) == ("?%", "On battery")
-    assert battery_lines(status(has_battery=False, plugged_in=True)) == ("No battery", "Plugged in")
+    assert battery_lines(status(has_battery=False, plugged_in=True)) == ("No battery", "On AC")
 
 
 def test_format_duration() -> None:
     assert format_duration(45 * 60 + 30) == "45 min"
-    assert format_duration(3600) == "1 h 00 min"
+    assert format_duration(3600) == "1h 00m"
 
 
 # --- focus timer --------------------------------------------------------------------
@@ -81,3 +81,13 @@ def test_format_mm_ss_rounds_up() -> None:
     assert format_mm_ss(1499.2) == "25:00"
     assert format_mm_ss(59.01) == "01:00"
     assert format_mm_ss(0) == "00:00"
+
+
+def test_battery_glyph() -> None:
+    from taskbits.widgets.drawing import battery_glyph
+
+    assert battery_glyph(0, charging=False) == ""
+    assert battery_glyph(54, charging=False) == ""
+    assert battery_glyph(100, charging=False) == ""
+    assert battery_glyph(100, charging=True) == ""
+    assert battery_glyph(150, charging=True) == ""  # clamped
